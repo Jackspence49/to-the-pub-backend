@@ -4,24 +4,35 @@ const { v4: uuidv4 } = require('uuid');
 /**
  * Expected payload shape:
  * {
- *   name, description, address_street, address_city, address_state, address_zip,
- *   latitude, longitude, phone, website, instagram, facebook,
- *   hours: [{ day_of_week: 0..6, open_time: 'HH:MM:SS', close_time: 'HH:MM:SS', is_closed: boolean }, ...],
- *   tag_ids: ['uuid', ...] // existing tag ids to relate
+ *  name, 
+ *  description, 
+ *  address_street, 
+ *  address_city, 
+ *  address_state, 
+ *  address_zip,
+ *  latitude, 
+ *  longitude, 
+ *  phone, 
+ *  website, 
+ *  instagram, 
+ *  facebook,
+ *  hours: [{ day_of_week: 0..6, open_time: 'HH:MM:SS', close_time: 'HH:MM:SS', is_closed: boolean }, ...],
+ *  tag_ids: ['uuid', ...] // existing tag ids to relate
  * }
  */
 async function createBar(req, res) {
   const payload = req.body;
 
   // Basic validation
-  if (!payload || !payload.name || !payload.address_street || !payload.address_zip) {
+  //  Name, street, city, state, zip are required
+  if (!payload || !payload.name || !payload.address_street || !payload.address_city|| !payload.address_zip|| !payload.address_state)  {
     return res.status(400).json({ error: 'Missing required bar fields' });
   }
 
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-
+// Inserting Business information into Bar table
     const barId = uuidv4();
     const insertBarSql = `INSERT INTO bars (id, name, description, address_street, address_city, address_state, address_zip, latitude, longitude, phone, website, instagram, facebook, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     const barParams = [
@@ -29,8 +40,8 @@ async function createBar(req, res) {
       payload.name,
       payload.description || null,
       payload.address_street,
-      payload.address_city || 'Boston',
-      payload.address_state || 'MA',
+      payload.address_city,
+      payload.address_state,
       payload.address_zip,
       payload.latitude || null,
       payload.longitude || null,
@@ -42,7 +53,7 @@ async function createBar(req, res) {
     ];
     await conn.execute(insertBarSql, barParams);
 
-    // Insert hours if provided
+    // Insert hours to bar-hours if provided
     if (Array.isArray(payload.hours)) {
       const insertHourSql = `INSERT INTO bar_hours (id, bar_id, day_of_week, open_time, close_time, is_closed) VALUES (?, ?, ?, ?, ?, ?)`;
       for (const h of payload.hours) {
@@ -59,7 +70,7 @@ async function createBar(req, res) {
       }
     }
 
-    // Insert bar_tags relationships if provided (assume tag ids already exist)
+    // Insert bar_tags relationships if provided (Just submitting tag ids, more efficient))
     if (Array.isArray(payload.tag_ids)) {
       const insertBarTagSql = `INSERT INTO bar_tags (bar_id, tag_id) VALUES (?, ?)`;
       for (const tagId of payload.tag_ids) {

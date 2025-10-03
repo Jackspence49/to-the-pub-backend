@@ -9,9 +9,11 @@ require('../config/env');
 const tagsRouter = require('./routes/tags');
 const barsRouter = require('./routes/bars');
 
-// enable CORS for the frontend during development
+// enable CORS for the frontend. Prefer configuring the real frontend origin
+// via the FRONTEND_URL environment variable. Falls back to localhost for dev.
+const REACT_APP_API_URL = process.env.REACT_APP_API_URL;
 app.use(cors({
-	origin: 'http://localhost:3000', // your frontend origin
+  origin: REACT_APP_API_URL,
 }));
 
 app.use(express.json());
