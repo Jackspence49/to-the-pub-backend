@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+// Load environment variables from the project's .env so DB credentials like DB_USER are available
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const mysql = require('mysql2/promise');
 const dbConfig = require('../config/database');
 
@@ -9,9 +11,13 @@ async function setupDatabase() {
   try {
     console.log('Setting up To The Pub database...');
     
-    // Create connection without specifying database first
-    const tempConfig = { ...dbConfig };
-    delete tempConfig.database;
+  // Create connection without specifying database first
+  const tempConfig = { ...dbConfig };
+  delete tempConfig.database;
+
+  // Ensure user/password are present (fallback to env vars if needed)
+  tempConfig.user = tempConfig.user || process.env.DB_USER;
+  tempConfig.password = tempConfig.password || process.env.DB_PASSWORD;
     
     connection = await mysql.createConnection(tempConfig);
     console.log('Connected to MySQL server');

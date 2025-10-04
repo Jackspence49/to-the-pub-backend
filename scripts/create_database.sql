@@ -1,8 +1,5 @@
--- To The Pub Database Schema
--- MySQL compatible version
 
--- Create database if it doesn't exist
-CREATE DATABASE IF NOT EXISTS to_the_pub;
+ -- initial schema
 USE to_the_pub;
 
 -- Bars table - core information about each bar
@@ -80,10 +77,22 @@ CREATE INDEX idx_bars_city ON bars(address_city);
 CREATE INDEX idx_bars_active ON bars(is_active);
 CREATE INDEX idx_bars_location ON bars(latitude, longitude);
 
--- Events indexes
 CREATE INDEX idx_events_bar_date ON events(bar_id, event_date);
 CREATE INDEX idx_events_date ON events(event_date);
 CREATE INDEX idx_events_active ON events(is_active);
+
+-- Web users table - application users and roles
+CREATE TABLE web_users (
+    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255),
+    role ENUM('super_admin', 'venue_owner', 'staff', 'manager', 'user') NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_web_users_role ON web_users(role);
 
 -- Bar tags indexes
 CREATE INDEX idx_bar_tags_bar ON bar_tags(bar_id);

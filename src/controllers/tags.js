@@ -2,7 +2,7 @@ const db = require('../utils/db');
 
 /**
  * GET /tags
- * Returns all tags from the database.
+ * Returns all tags from the database (id, name, category, time created).
  */
 async function getAllTags(req, res) {
   try {
