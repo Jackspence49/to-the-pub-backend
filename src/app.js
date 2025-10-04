@@ -8,6 +8,7 @@ require('../config/env');
 // Routes
 const tagsRouter = require('./routes/tags');
 const barsRouter = require('./routes/bars');
+const usersRouter = require('./routes/users');
 
 // enable CORS for the frontend. Prefer configuring the real frontend origin
 // via the FRONTEND_URL environment variable. Falls back to localhost for dev.
@@ -22,5 +23,7 @@ app.use(express.json());
 app.use('/tags', tagsRouter);
 // mount bars routes at /bars
 app.use('/bars', barsRouter);
+// mount users routes at /users
+app.use('/users', usersRouter);
 
 module.exports = app;
