@@ -258,6 +258,65 @@ describe('Bars Controller Tests', () => {
 
       expect(response.body.data).toHaveProperty('id');
     });
+
+    test('should prevent creating duplicate bars with same name and address', async () => {
+      // Mock the duplicate check to return an existing bar
+      const duplicateCheckResult = [{ id: 'existing-bar-id' }];
+      mockConnection.execute.mockResolvedValueOnce([duplicateCheckResult]);
+
+      const response = await request(app)
+        .post('/bars')
+        .set('Authorization', `Bearer ${validToken}`)
+        .send(validBarData)
+        .expect(409);
+
+      expect(response.body.error).toBe('A bar with this name and address already exists');
+      expect(mockConnection.beginTransaction).toHaveBeenCalled();
+      expect(mockConnection.rollback).toHaveBeenCalled();
+      expect(mockConnection.release).toHaveBeenCalled();
+      
+      // Verify the duplicate check SQL was called with correct parameters
+      expect(mockConnection.execute).toHaveBeenCalledWith(
+        expect.stringContaining('SELECT id FROM bars'),
+        [
+          validBarData.name,
+          validBarData.address_street,
+          validBarData.address_city,
+          validBarData.address_state,
+          validBarData.address_zip
+        ]
+      );
+    });
+
+    test('should allow creating bar when no duplicate exists', async () => {
+      // Mock the duplicate check to return no results (no duplicate)
+      mockConnection.execute.mockResolvedValueOnce([[]]);
+      // Mock the successful bar insertion
+      mockConnection.execute.mockResolvedValue([{ insertId: 1 }]);
+
+      const response = await request(app)
+        .post('/bars')
+        .set('Authorization', `Bearer ${validToken}`)
+        .send(validBarData)
+        .expect(201);
+
+      expect(response.body.data).toHaveProperty('id');
+      expect(mockConnection.beginTransaction).toHaveBeenCalled();
+      expect(mockConnection.commit).toHaveBeenCalled();
+      expect(mockConnection.release).toHaveBeenCalled();
+      
+      // Verify duplicate check was performed first
+      expect(mockConnection.execute).toHaveBeenNthCalledWith(1,
+        expect.stringContaining('SELECT id FROM bars'),
+        [
+          validBarData.name,
+          validBarData.address_street,
+          validBarData.address_city,
+          validBarData.address_state,
+          validBarData.address_zip
+        ]
+      );
+    });
   });
 
   describe('PUT /bars/:id - Update Bar', () => {
@@ -342,6 +401,33 @@ describe('Bars Controller Tests', () => {
         .expect(500);
 
       expect(response.body.error).toBe('Failed to update bar');
+      expect(mockConnection.rollback).toHaveBeenCalled();
+    });
+
+    test('should prevent updating to duplicate bar information', async () => {
+      // Mock bar exists check
+      db.execute.mockResolvedValue([[{ id: 'bar-1' }]]);
+      
+      // Mock duplicate found in update check
+      mockConnection.execute.mockResolvedValueOnce([
+        [{ id: 'existing-bar-id' }] // Duplicate found
+      ]);
+
+      const duplicateUpdateData = {
+        name: 'Existing Bar',
+        address_street: '123 Existing St',
+        address_city: 'Existing City',
+        address_state: 'TX',
+        address_zip: '12345'
+      };
+
+      const response = await request(app)
+        .put('/bars/bar-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .send(duplicateUpdateData)
+        .expect(409);
+
+      expect(response.body.error).toBe('A bar with this name and address already exists');
       expect(mockConnection.rollback).toHaveBeenCalled();
     });
   });

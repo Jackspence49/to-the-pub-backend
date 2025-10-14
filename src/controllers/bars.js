@@ -32,6 +32,30 @@ async function createBar(req, res) {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+
+    // Check for duplicate bar (same name and address) - case insensitive
+    const duplicateCheckSql = `
+      SELECT id FROM bars 
+      WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) 
+      AND LOWER(TRIM(address_street)) = LOWER(TRIM(?)) 
+      AND LOWER(TRIM(address_city)) = LOWER(TRIM(?)) 
+      AND LOWER(TRIM(address_state)) = LOWER(TRIM(?)) 
+      AND TRIM(address_zip) = TRIM(?) 
+      AND is_active = 1
+    `;
+    const [duplicateRows] = await conn.execute(duplicateCheckSql, [
+      payload.name,
+      payload.address_street,
+      payload.address_city,
+      payload.address_state,
+      payload.address_zip
+    ]);
+
+    if (duplicateRows && duplicateRows.length > 0) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'A bar with this name and address already exists' });
+    }
+
 // Inserting Business information into Bar table
     const barId = uuidv4();
     const insertBarSql = `INSERT INTO bars (id, name, description, address_street, address_city, address_state, address_zip, latitude, longitude, phone, website, instagram, facebook, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -210,6 +234,33 @@ async function updateBar(req, res) {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      
+      // Only check for duplicates if we have a complete set of required fields
+      // Either all provided in payload, or we need to get current data
+      if (payload.name && payload.address_street && payload.address_city && 
+          payload.address_state && payload.address_zip) {
+        
+        // Check for duplicates with all provided values (excluding current bar)
+        const duplicateCheckSql = `
+          SELECT id FROM bars 
+          WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) 
+          AND LOWER(TRIM(address_street)) = LOWER(TRIM(?)) 
+          AND LOWER(TRIM(address_city)) = LOWER(TRIM(?)) 
+          AND LOWER(TRIM(address_state)) = LOWER(TRIM(?)) 
+          AND TRIM(address_zip) = TRIM(?) 
+          AND id != ? 
+          AND is_active = 1
+        `;
+        const [duplicateRows] = await conn.execute(duplicateCheckSql, [
+          payload.name, payload.address_street, payload.address_city, 
+          payload.address_state, payload.address_zip, barId
+        ]);
+        
+        if (duplicateRows && duplicateRows.length > 0) {
+          await conn.rollback();
+          return res.status(409).json({ error: 'A bar with this name and address already exists' });
+        }
+      }
       
       // Update basic bar information
       const updateSql = `
