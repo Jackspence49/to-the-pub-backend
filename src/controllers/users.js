@@ -1,6 +1,7 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 /**
  * Signup payload expected:
@@ -53,7 +54,7 @@ async function signup(req, res) {
  * Login payload expected:
  * { email: string, password: string }
  *
- *  Returns 200 with basic user info on success, 401 on invalid creds
+ * Returns 200 with JWT token and user info on success, 401 on invalid creds
  */
 async function login(req, res) {
   const payload = req.body;
@@ -65,25 +66,110 @@ async function login(req, res) {
   const password = payload.password;
 
   try {
+    // Look up user by email (username field is treated as email)
     const selectSql = `SELECT id, email, password_hash, full_name, role FROM web_users WHERE email = ? LIMIT 1`;
+    
     const [rows] = await db.execute(selectSql, [email]);
     if (!rows || rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid email or password' });
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const user = rows[0];
-    const passwordHash = user.password_hash;
-    const match = await bcrypt.compare(password, passwordHash);
+    
+    // Compare the received password with the stored hashed password using bcrypt.compare()
+    const match = await bcrypt.compare(password, user.password_hash);
     if (!match) {
-      return res.status(401).json({ error: 'Invalid email or password' });
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Success - return basic user info (no password)
-    return res.status(200).json({ data: { id: user.id, email: user.email, full_name: user.full_name, role: user.role } });
+    // Create JWT token with user ID and role information
+    const jwtPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role
+    };
+
+    const token = jwt.sign(jwtPayload, process.env.JWT_SECRET, { 
+      expiresIn: '24h' 
+    });
+
+    // Send the JWT back in the response along with user info
+    return res.status(200).json({ 
+      data: { 
+        id: user.id, 
+        email: user.email, 
+        full_name: user.full_name, 
+        role: user.role 
+      },
+      token: token
+    });
   } catch (err) {
     console.error('Error logging in:', err.message || err);
     return res.status(500).json({ error: 'Login failed' });
   }
 }
 
-module.exports = { signup, login };
+/**
+ * Get current user profile (protected route)
+ * Requires authentication middleware to populate req.user
+ */
+async function getProfile(req, res) {
+  try {
+    const userId = req.user.userId; // From JWT payload
+    
+    const selectSql = `SELECT id, email, full_name, role, created_at FROM web_users WHERE id = ? LIMIT 1`;
+    const [rows] = await db.execute(selectSql, [userId]);
+    
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = rows[0];
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+        created_at: user.created_at
+      }
+    });
+  } catch (err) {
+    console.error('Error getting user profile:', err.message || err);
+    return res.status(500).json({ error: 'Failed to get user profile' });
+  }
+}
+
+/**
+ * Update user profile (protected route)
+ * Allows users to update their full_name
+ */
+async function updateProfile(req, res) {
+  try {
+    const userId = req.user.userId; // From JWT payload
+    const { full_name } = req.body;
+    
+    if (!full_name) {
+      return res.status(400).json({ error: 'full_name is required' });
+    }
+    
+    const updateSql = `UPDATE web_users SET full_name = ? WHERE id = ?`;
+    const [result] = await db.execute(updateSql, [full_name, userId]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      data: { id: userId, full_name }
+    });
+  } catch (err) {
+    console.error('Error updating user profile:', err.message || err);
+    return res.status(500).json({ error: 'Failed to update user profile' });
+  }
+}
+
+module.exports = { signup, login, getProfile, updateProfile };
