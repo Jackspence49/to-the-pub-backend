@@ -6,6 +6,10 @@ const { authenticateToken } = require('../utils/auth');
 // Public routes (no authentication required)
 // POST /users/login -> login with email + password
 router.post('/login', usersController.login);
+// POST /users/forgot-password -> initiate password reset
+router.post('/forgot-password', usersController.forgotPassword);
+// POST /users/reset-password -> reset password with token
+router.post('/reset-password', usersController.resetPassword);
 
 // Protected routes (authentication required)
 // POST /users -> signup (creates a super_admin user for this form)

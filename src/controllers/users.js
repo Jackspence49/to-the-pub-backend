@@ -222,4 +222,121 @@ async function deleteUser(req, res) {
   }
 }
 
-module.exports = { signup, login, getProfile, updateProfile, deleteUser };
+/**
+ * Initiate password reset (public route)
+ * Payload expected: { email: string }
+ * 
+ * Generates a reset token and stores it in the database with expiration time.
+ * In a production environment, this would send an email with the reset link.
+ * For now, it returns the token in the response for testing purposes.
+ */
+async function forgotPassword(req, res) {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    
+    const normalizedEmail = email.trim().toLowerCase();
+    
+    // Check if user exists
+    const selectSql = `SELECT id, email FROM web_users WHERE email = ? LIMIT 1`;
+    const [rows] = await db.execute(selectSql, [normalizedEmail]);
+    
+    if (!rows || rows.length === 0) {
+      // Don't reveal whether email exists or not for security
+      return res.status(200).json({ 
+        success: true, 
+        message: 'If the email exists, a password reset link has been sent' 
+      });
+    }
+    
+    const user = rows[0];
+    
+    // Generate a secure reset token
+    const resetToken = uuidv4() + '-' + Date.now();
+    
+    // Set expiration time (1 hour from now)
+    const expirationTime = new Date();
+    expirationTime.setHours(expirationTime.getHours() + 1);
+    
+    // Store the reset token in the database
+    const updateSql = `UPDATE web_users SET reset_token = ?, reset_token_expires = ? WHERE id = ?`;
+    await db.execute(updateSql, [resetToken, expirationTime, user.id]);
+    
+    // In production, you would send an email here instead of returning the token
+    // For testing purposes, we return the token in the response
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset initiated successfully',
+      // Remove this in production - only for testing
+      resetToken: resetToken
+    });
+    
+  } catch (err) {
+    console.error('Error initiating password reset:', err.message || err);
+    return res.status(500).json({ error: 'Failed to initiate password reset' });
+  }
+}
+
+/**
+ * Reset password using token (public route)
+ * Payload expected: { token: string, newPassword: string }
+ * 
+ * Validates the reset token and updates the user's password if valid.
+ */
+async function resetPassword(req, res) {
+  try {
+    const { token, newPassword } = req.body;
+    
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: 'Token and new password are required' });
+    }
+    
+    // Validate password length
+    if (newPassword.length < 8) {
+      return res.status(422).json({ error: 'Password must be at least 8 characters' });
+    }
+    
+    // Find user with valid reset token that hasn't expired
+    const selectSql = `
+      SELECT id, email, reset_token, reset_token_expires 
+      FROM web_users 
+      WHERE reset_token = ? AND reset_token_expires > NOW() 
+      LIMIT 1
+    `;
+    
+    const [rows] = await db.execute(selectSql, [token]);
+    
+    if (!rows || rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid or expired reset token' });
+    }
+    
+    const user = rows[0];
+    
+    // Hash the new password
+    const saltRounds = 10;
+    const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
+    
+    // Update password and clear reset token
+    const updateSql = `
+      UPDATE web_users 
+      SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL 
+      WHERE id = ?
+    `;
+    
+    await db.execute(updateSql, [newPasswordHash, user.id]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+    
+  } catch (err) {
+    console.error('Error resetting password:', err.message || err);
+    return res.status(500).json({ error: 'Failed to reset password' });
+  }
+}
+
+module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword };

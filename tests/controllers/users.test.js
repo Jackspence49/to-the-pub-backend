@@ -217,3 +217,375 @@ describe('POST /users/login - Success Test', () => {
     }
   });
 });
+
+describe('POST /users/forgot-password', () => {
+  let testUser;
+  
+  beforeEach(() => {
+    jest.clearAllMocks();
+    
+    testUser = {
+      id: 'test-user-id-123',
+      email: 'testuser@example.com',
+      password_hash: bcrypt.hashSync('testpassword123', 10),
+      full_name: 'Test User',
+      role: 'user',
+      created_at: new Date()
+    };
+  });
+
+  test('should successfully initiate password reset for existing user', async () => {
+    // Mock database response for user lookup
+    const mockExecute = jest.fn()
+      .mockResolvedValueOnce([[testUser]]) // First call: user lookup
+      .mockResolvedValueOnce([{ affectedRows: 1 }]); // Second call: token update
+    
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/forgot-password')
+      .send({ email: 'testuser@example.com' })
+      .expect(200);
+
+    // Verify response structure
+    expect(response.body).toEqual({
+      success: true,
+      message: 'Password reset initiated successfully',
+      resetToken: expect.any(String)
+    });
+
+    // Verify reset token format (UUID + timestamp)
+    expect(response.body.resetToken).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-\d+$/);
+
+    // Verify database calls
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    
+    // First call should be user lookup
+    expect(mockExecute).toHaveBeenNthCalledWith(1,
+      'SELECT id, email FROM web_users WHERE email = ? LIMIT 1',
+      ['testuser@example.com']
+    );
+
+    // Second call should be token update
+    expect(mockExecute).toHaveBeenNthCalledWith(2,
+      'UPDATE web_users SET reset_token = ?, reset_token_expires = ? WHERE id = ?',
+      [expect.any(String), expect.any(Date), testUser.id]
+    );
+  });
+
+  test('should return success for non-existent email (security)', async () => {
+    // Mock database response for non-existent user
+    const mockExecute = jest.fn().mockResolvedValue([[]]);
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/forgot-password')
+      .send({ email: 'nonexistent@example.com' })
+      .expect(200);
+
+    // Should return generic success message for security
+    expect(response.body).toEqual({
+      success: true,
+      message: 'If the email exists, a password reset link has been sent'
+    });
+
+    // Should not include resetToken for non-existent users
+    expect(response.body.resetToken).toBeUndefined();
+
+    // Should only call database once for user lookup
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  test('should handle case-insensitive email normalization', async () => {
+    const mockExecute = jest.fn()
+      .mockResolvedValueOnce([[testUser]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/forgot-password')
+      .send({ email: 'TESTUSER@EXAMPLE.COM' })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+
+    // Verify email was normalized to lowercase
+    expect(mockExecute).toHaveBeenNthCalledWith(1,
+      'SELECT id, email FROM web_users WHERE email = ? LIMIT 1',
+      ['testuser@example.com']
+    );
+  });
+
+  test('should return 400 for missing email', async () => {
+    const response = await request(app)
+      .post('/users/forgot-password')
+      .send({})
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: 'Email is required'
+    });
+  });
+
+  test('should return 500 on database error', async () => {
+    const mockExecute = jest.fn().mockRejectedValue(new Error('Database connection failed'));
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/forgot-password')
+      .send({ email: 'testuser@example.com' })
+      .expect(500);
+
+    expect(response.body).toEqual({
+      error: 'Failed to initiate password reset'
+    });
+  });
+});
+
+describe('POST /users/reset-password', () => {
+  let testUser;
+  let validToken;
+  let futureExpiration;
+  
+  beforeEach(() => {
+    jest.clearAllMocks();
+    
+    validToken = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890-1699372800000';
+    futureExpiration = new Date(Date.now() + 60 * 60 * 1000); // 1 hour from now
+    
+    testUser = {
+      id: 'test-user-id-123',
+      email: 'testuser@example.com',
+      reset_token: validToken,
+      reset_token_expires: futureExpiration
+    };
+  });
+
+  test('should successfully reset password with valid token', async () => {
+    const mockExecute = jest.fn()
+      .mockResolvedValueOnce([[testUser]]) // First call: token lookup
+      .mockResolvedValueOnce([{ affectedRows: 1 }]); // Second call: password update
+    
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: validToken,
+        newPassword: 'newSecurePassword123'
+      })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+    // Verify database calls
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    
+    // First call: token validation
+    expect(mockExecute).toHaveBeenNthCalledWith(1,
+      expect.stringContaining('SELECT id, email, reset_token, reset_token_expires'),
+      [validToken]
+    );
+
+    // Second call: password update and token cleanup
+    const secondCall = mockExecute.mock.calls[1];
+    expect(secondCall[0]).toContain('UPDATE web_users');
+    expect(secondCall[0]).toContain('SET password_hash = ?');
+    expect(secondCall[0]).toContain('reset_token = NULL');
+    expect(secondCall[0]).toContain('reset_token_expires = NULL');
+    expect(secondCall[0]).toContain('WHERE id = ?');
+    expect(secondCall[1]).toEqual([expect.any(String), testUser.id]);
+  });
+
+  test('should return 400 for missing token', async () => {
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({ newPassword: 'newPassword123' })
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: 'Token and new password are required'
+    });
+  });
+
+  test('should return 400 for missing password', async () => {
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({ token: validToken })
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: 'Token and new password are required'
+    });
+  });
+
+  test('should return 422 for password too short', async () => {
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: validToken,
+        newPassword: '123' // Too short
+      })
+      .expect(422);
+
+    expect(response.body).toEqual({
+      error: 'Password must be at least 8 characters'
+    });
+  });
+
+  test('should return 401 for invalid token', async () => {
+    // Mock database response for invalid token
+    const mockExecute = jest.fn().mockResolvedValue([[]]);
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: 'invalid-token',
+        newPassword: 'newPassword123'
+      })
+      .expect(401);
+
+    expect(response.body).toEqual({
+      error: 'Invalid or expired reset token'
+    });
+  });
+
+  test('should return 401 for expired token', async () => {
+    // Create expired token scenario by mocking empty result
+    const mockExecute = jest.fn().mockResolvedValue([[]]);
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: validToken,
+        newPassword: 'newPassword123'
+      })
+      .expect(401);
+
+    expect(response.body).toEqual({
+      error: 'Invalid or expired reset token'
+    });
+
+    // Verify the SQL query includes expiration check
+    expect(mockExecute).toHaveBeenCalledWith(
+      expect.stringContaining('reset_token_expires > NOW()'),
+      [validToken]
+    );
+  });
+
+  test('should hash new password securely', async () => {
+    const mockExecute = jest.fn()
+      .mockResolvedValueOnce([[testUser]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    
+    db.execute = mockExecute;
+
+    const newPassword = 'newSecurePassword123';
+    
+    await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: validToken,
+        newPassword: newPassword
+      })
+      .expect(200);
+
+    // Get the hashed password from the update call
+    const updateCall = mockExecute.mock.calls[1];
+    const hashedPassword = updateCall[1][0];
+
+    // Verify it's a bcrypt hash (starts with $2a$ or $2b$ and is 60 chars)
+    expect(hashedPassword).toMatch(/^\$2[ab]\$\d+\$.{53}$/);
+    
+    // Verify the hash is correct for the password
+    expect(bcrypt.compareSync(newPassword, hashedPassword)).toBe(true);
+    
+    // Verify it's not the plain password
+    expect(hashedPassword).not.toBe(newPassword);
+  });
+
+  test('should return 500 on database error', async () => {
+    const mockExecute = jest.fn().mockRejectedValue(new Error('Database error'));
+    db.execute = mockExecute;
+
+    const response = await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: validToken,
+        newPassword: 'newPassword123'
+      })
+      .expect(500);
+
+    expect(response.body).toEqual({
+      error: 'Failed to reset password'
+    });
+  });
+});
+
+describe('Password Reset Integration Flow', () => {
+  test('should complete full password reset flow', async () => {
+    let resetToken;
+    
+    const testUser = {
+      id: 'test-user-id-123',
+      email: 'testuser@example.com',
+      password_hash: bcrypt.hashSync('oldPassword123', 10),
+      full_name: 'Test User',
+      role: 'user'
+    };
+
+    // Step 1: Initiate password reset
+    const mockExecuteForgot = jest.fn()
+      .mockResolvedValueOnce([[testUser]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    
+    db.execute = mockExecuteForgot;
+
+    const forgotResponse = await request(app)
+      .post('/users/forgot-password')
+      .send({ email: testUser.email })
+      .expect(200);
+
+    resetToken = forgotResponse.body.resetToken;
+    expect(resetToken).toBeDefined();
+
+    // Step 2: Reset password with token
+    jest.clearAllMocks();
+    
+    const userWithToken = {
+      ...testUser,
+      reset_token: resetToken,
+      reset_token_expires: new Date(Date.now() + 60 * 60 * 1000)
+    };
+
+    const mockExecuteReset = jest.fn()
+      .mockResolvedValueOnce([[userWithToken]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    
+    db.execute = mockExecuteReset;
+
+    const resetResponse = await request(app)
+      .post('/users/reset-password')
+      .send({
+        token: resetToken,
+        newPassword: 'newSecurePassword123'
+      })
+      .expect(200);
+
+    expect(resetResponse.body).toEqual({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+    // Verify token cleanup in the update call
+    const updateCall = mockExecuteReset.mock.calls[1];
+    expect(updateCall[0]).toContain('reset_token = NULL');
+    expect(updateCall[0]).toContain('reset_token_expires = NULL');
+  });
+});
