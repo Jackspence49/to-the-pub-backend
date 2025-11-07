@@ -4,9 +4,13 @@ const barsController = require('../controllers/bars');
 const { authenticateToken, optionalAuth } = require('../utils/auth');
 
 // Public routes (read operations)
-// GET /bars -> list all bars (optional auth for future features)
+// GET /bars -> list all bars with optional includes (optional auth for future features)
 router.get('/', optionalAuth, barsController.getAllBars);
-// GET /bars/:id -> get single bar (optional auth for future features)
+// GET /bars/filter -> advanced filtering with optional includes
+router.get('/filter', optionalAuth, barsController.filterBars);
+// GET /bars/search/name -> search bars by name with optional includes
+router.get('/search/name', optionalAuth, barsController.searchBarsByName);
+// GET /bars/:id -> get single bar with optional includes (optional auth for future features)
 router.get('/:id', optionalAuth, barsController.getBar);
 
 // Protected routes (data modification)

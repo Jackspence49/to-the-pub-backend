@@ -26,4 +26,15 @@ app.use('/bars', barsRouter);
 // mount users routes at /users
 app.use('/users', usersRouter);
 
+// JSON parsing error handler
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({
+      error: 'Invalid JSON format in request body. Please check your JSON syntax.',
+      details: 'Make sure all string values are enclosed in double quotes and the JSON is properly formatted.'
+    });
+  }
+  next(err);
+});
+
 module.exports = app;

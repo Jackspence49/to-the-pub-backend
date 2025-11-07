@@ -73,6 +73,7 @@ CREATE TABLE events (
 
 -- Indexes for better query performance
 -- Bars indexes
+CREATE INDEX idx_bars_name ON bars(name);
 CREATE INDEX idx_bars_city ON bars(address_city);
 CREATE INDEX idx_bars_active ON bars(is_active);
 CREATE INDEX idx_bars_location ON bars(latitude, longitude);

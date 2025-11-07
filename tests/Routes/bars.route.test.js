@@ -97,6 +97,260 @@ describe('Bars Routes Integration Tests', () => {
     });
   });
 
+  describe('GET /bars/search/name - Public Route', () => {
+    test('should search for bars by name without authentication', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Irish Pub',
+          address_street: '123 Test St',
+          is_active: 1
+        },
+        {
+          id: 'bar-2',
+          name: 'The Irish Corner',
+          address_street: '456 Another St',
+          is_active: 1
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/search/name')
+        .query({ q: 'irish' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('data');
+      expect(response.body.meta).toMatchObject({
+        query: 'irish',
+        count: 2,
+        included: []
+      });
+      expect(Array.isArray(response.body.data)).toBe(true);
+      expect(response.body.data).toHaveLength(2);
+    });
+
+    test('should search with include parameters', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Irish Pub',
+          address_street: '123 Test St',
+          is_active: 1,
+          hours: '1:12:00:00:23:00:00:0',
+          tags: 'tag-1:Irish Pub:type'
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/search/name')
+        .query({ q: 'irish', include: 'hours,tags' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.meta.included).toEqual(['hours', 'tags']);
+      expect(response.body.data[0]).toHaveProperty('hours');
+      expect(response.body.data[0]).toHaveProperty('tags');
+    });
+
+    test('should work with optional authentication', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Test Bar',
+          address_street: '123 Test St',
+          is_active: 1
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/search/name')
+        .set('Authorization', `Bearer ${validToken}`)
+        .query({ q: 'test' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('data');
+      expect(response.body).toHaveProperty('meta');
+    });
+
+    test('should return 400 when query parameter is missing', async () => {
+      const response = await request(app)
+        .get('/bars/search/name')
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'Search query parameter "q" is required');
+    });
+
+    test('should return 400 when query parameter is empty', async () => {
+      const response = await request(app)
+        .get('/bars/search/name')
+        .query({ q: '' })
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'Search query parameter "q" is required');
+    });
+
+    test('should return empty results when no bars match', async () => {
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/bars/search/name')
+        .query({ q: 'nonexistent' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('data', []);
+      expect(response.body.meta).toMatchObject({
+        count: 0,
+        query: 'nonexistent',
+        included: []
+      });
+    });
+
+    test('should handle database errors gracefully', async () => {
+      db.execute.mockRejectedValueOnce(new Error('Database connection failed'));
+
+      const response = await request(app)
+        .get('/bars/search/name')
+        .query({ q: 'test' })
+        .expect(500);
+
+      expect(response.body).toHaveProperty('error', 'Failed to search bars');
+    });
+  });
+
+  describe('GET /bars/filter - Public Route', () => {
+    test('should filter bars by tag without authentication', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Sports Bar',
+          address_street: '123 Test St',
+          address_city: 'Boston',
+          is_active: 1
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/filter')
+        .query({ tag: 'Sports Bar' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('data');
+      expect(response.body).toHaveProperty('meta');
+      expect(response.body.meta.filters).toMatchObject({ tag: 'Sports Bar' });
+      expect(Array.isArray(response.body.data)).toBe(true);
+    });
+
+    test('should filter bars by city', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Boston Bar',
+          address_city: 'Boston',
+          is_active: 1
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/filter')
+        .query({ city: 'boston' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.meta.filters).toMatchObject({ city: 'boston' });
+    });
+
+    test('should filter bars with upcoming events', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Event Bar',
+          is_active: 1
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/filter')
+        .query({ has_events: 'true' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.meta.filters).toMatchObject({ has_events: 'true' });
+    });
+
+    test('should handle multiple filters with includes', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Test Bar',
+          address_city: 'Boston',
+          is_active: 1,
+          hours: '1:12:00:00:23:00:00:0',
+          tags: 'tag-1:Sports Bar:type'
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars/filter')
+        .query({ 
+          city: 'boston', 
+          tag: 'Sports Bar',
+          include: 'hours,tags'
+        })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.meta.filters).toMatchObject({ 
+        city: 'boston', 
+        tag: 'Sports Bar' 
+      });
+      expect(response.body.meta.included).toEqual(['hours', 'tags']);
+      expect(response.body.data[0]).toHaveProperty('hours');
+      expect(response.body.data[0]).toHaveProperty('tags');
+    });
+
+    test('should handle empty filter results', async () => {
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/bars/filter')
+        .query({ tag: 'NonexistentTag' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.data).toEqual([]);
+      expect(response.body.meta.count).toBe(0);
+    });
+
+    test('should handle database errors in filter', async () => {
+      db.execute.mockRejectedValueOnce(new Error('Database connection failed'));
+
+      const response = await request(app)
+        .get('/bars/filter')
+        .query({ city: 'boston' })
+        .expect(500);
+
+      expect(response.body).toHaveProperty('error', 'Failed to filter bars');
+    });
+  });
+
   describe('GET /bars/:id - Public Route', () => {
     test('should get single bar without authentication', async () => {
       const mockBar = {
@@ -123,6 +377,28 @@ describe('Bars Routes Integration Tests', () => {
         hours: [],
         tags: []
       });
+    });
+
+    test('should support include parameters', async () => {
+      const mockBar = {
+        id: 'bar-1',
+        name: 'Test Bar',
+        is_active: 1,
+        hours: '1:12:00:00:23:00:00:0,2:12:00:00:23:00:00:0',
+        tags: 'tag-1:Sports Bar:type,tag-2:Pool Tables:amenity'
+      };
+
+      db.execute.mockResolvedValueOnce([[mockBar]]);
+
+      const response = await request(app)
+        .get('/bars/bar-1')
+        .query({ include: 'hours,tags' })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.data.hours).toHaveLength(2);
+      expect(response.body.data.tags).toHaveLength(2);
+      expect(response.body.meta.included).toEqual(['hours', 'tags']);
     });
 
     test('should return 404 for non-existent bar', async () => {
