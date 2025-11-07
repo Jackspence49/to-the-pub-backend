@@ -14,5 +14,7 @@ router.post('/', authenticateToken, usersController.signup);
 router.get('/profile', authenticateToken, usersController.getProfile);
 // PUT /users/profile -> update current user profile
 router.put('/profile', authenticateToken, usersController.updateProfile);
+// DELETE /users/:id -> delete user by UUID
+router.delete('/:id', authenticateToken, usersController.deleteUser);
 
 module.exports = router;

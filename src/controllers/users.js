@@ -172,4 +172,54 @@ async function updateProfile(req, res) {
   }
 }
 
-module.exports = { signup, login, getProfile, updateProfile };
+/**
+ * Delete user by UUID (protected route)
+ * Requires authentication
+ */
+async function deleteUser(req, res) {
+  try {
+    const { id } = req.params; // UUID from URL parameters
+    
+    if (!id) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Basic UUID format validation
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({ error: 'Invalid UUID format' });
+    }
+
+    // Check if user exists before deletion
+    const selectSql = `SELECT id, email FROM web_users WHERE id = ? LIMIT 1`;
+    const [rows] = await db.execute(selectSql, [id]);
+    
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userToDelete = rows[0];
+    
+    // Delete the user
+    const deleteSql = `DELETE FROM web_users WHERE id = ?`;
+    const [result] = await db.execute(deleteSql, [id]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'User deleted successfully',
+      data: { 
+        id: userToDelete.id, 
+        email: userToDelete.email 
+      }
+    });
+  } catch (err) {
+    console.error('Error deleting user:', err.message || err);
+    return res.status(500).json({ error: 'Failed to delete user' });
+  }
+}
+
+module.exports = { signup, login, getProfile, updateProfile, deleteUser };

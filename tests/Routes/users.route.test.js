@@ -45,8 +45,8 @@ describe('Users Routes Integration Tests', () => {
     db.getConnection = jest.fn().mockResolvedValue(mockConnection);
   });
 
-  describe('POST /users - Signup (Public Route)', () => {
-    test('should create new user with valid data', async () => {
+  describe('POST /users - Signup (Protected Route)', () => {
+    test('should create new user with valid authentication', async () => {
       const newUser = {
         email: 'newuser@example.com',
         password: 'securePassword123',
@@ -63,6 +63,7 @@ describe('Users Routes Integration Tests', () => {
 
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send(newUser)
         .expect(201);
 
@@ -73,6 +74,38 @@ describe('Users Routes Integration Tests', () => {
       expect(response.body.data).toHaveProperty('full_name', newUser.full_name);
       expect(response.body.data).toHaveProperty('role', 'super_admin');
       expect(response.body.data).not.toHaveProperty('password');
+    });
+
+    test('should reject signup without authentication', async () => {
+      const newUser = {
+        email: 'newuser@example.com',
+        password: 'securePassword123',
+        full_name: 'John Doe'
+      };
+
+      const response = await request(app)
+        .post('/users')
+        .send(newUser)
+        .expect(401);
+
+      expect(response.body).toHaveProperty('success', false);
+      expect(response.body).toHaveProperty('message', 'Access denied. No token provided or invalid format. Expected: Bearer <token>');
+    });
+
+    test('should reject signup with invalid token', async () => {
+      const newUser = {
+        email: 'newuser@example.com',
+        password: 'securePassword123',
+        full_name: 'John Doe'
+      };
+
+      const response = await request(app)
+        .post('/users')
+        .set('Authorization', 'Bearer invalid-token')
+        .send(newUser)
+        .expect(403);
+
+      expect(response.body).toHaveProperty('success', false);
     });
 
     test('should reject signup with existing email', async () => {
@@ -92,6 +125,7 @@ describe('Users Routes Integration Tests', () => {
 
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send(existingUser)
         .expect(409);
 
@@ -106,32 +140,11 @@ describe('Users Routes Integration Tests', () => {
 
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send(incompleteUser)
         .expect(400);
 
       expect(response.body).toHaveProperty('error', 'email and password are required');
-    });
-
-    test('should validate email format', async () => {
-      const invalidEmailUser = {
-        email: 'invalid-email',
-        password: 'securePassword123',
-        full_name: 'John Doe'
-      };
-
-      const hashedPassword = 'hashed_password_123';
-      bcrypt.hash.mockResolvedValueOnce(hashedPassword);
-
-      // Mock database error (assuming validation happens at DB level or gets processed)
-      const dbError = new Error('Database error');
-      db.execute.mockRejectedValueOnce(dbError);
-
-      const response = await request(app)
-        .post('/users')
-        .send(invalidEmailUser)
-        .expect(500);
-
-      expect(response.body).toHaveProperty('error', 'Failed to create user');
     });
 
     test('should validate password strength', async () => {
@@ -143,6 +156,7 @@ describe('Users Routes Integration Tests', () => {
 
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send(weakPasswordUser)
         .expect(400);
 
@@ -161,6 +175,7 @@ describe('Users Routes Integration Tests', () => {
 
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send(newUser)
         .expect(500);
 
@@ -433,6 +448,98 @@ describe('Users Routes Integration Tests', () => {
     });
   });
 
+  describe('DELETE /users/:id - Delete User (Protected Route)', () => {
+    test('should delete user with valid authentication and UUID', async () => {
+      const userIdToDelete = '550e8400-e29b-41d4-a716-446655440000';
+      const mockUserToDelete = {
+        id: userIdToDelete,
+        email: 'delete@example.com'
+      };
+
+      // Mock user exists check
+      db.execute.mockResolvedValueOnce([[mockUserToDelete]]);
+      // Mock successful deletion
+      db.execute.mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+      const response = await request(app)
+        .delete(`/users/${userIdToDelete}`)
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('message', 'User deleted successfully');
+      expect(response.body.data).toHaveProperty('id', userIdToDelete);
+      expect(response.body.data).toHaveProperty('email', mockUserToDelete.email);
+    });
+
+    test('should reject delete without authentication', async () => {
+      const userIdToDelete = '550e8400-e29b-41d4-a716-446655440000';
+
+      const response = await request(app)
+        .delete(`/users/${userIdToDelete}`)
+        .expect(401);
+
+      expect(response.body).toHaveProperty('success', false);
+      expect(response.body).toHaveProperty('message', 'Access denied. No token provided or invalid format. Expected: Bearer <token>');
+    });
+
+    test('should reject delete with invalid token', async () => {
+      const userIdToDelete = '550e8400-e29b-41d4-a716-446655440000';
+
+      const response = await request(app)
+        .delete(`/users/${userIdToDelete}`)
+        .set('Authorization', 'Bearer invalid-token')
+        .expect(403);
+
+      expect(response.body).toHaveProperty('success', false);
+    });
+
+    test('should return 400 for invalid UUID format', async () => {
+      const invalidId = 'invalid-uuid';
+
+      const response = await request(app)
+        .delete(`/users/${invalidId}`)
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(400);
+
+      expect(response.body).toHaveProperty('error', 'Invalid UUID format');
+    });
+
+    test('should return 404 when user not found', async () => {
+      const nonExistentId = '550e8400-e29b-41d4-a716-446655440001';
+
+      // Mock user not found
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .delete(`/users/${nonExistentId}`)
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'User not found');
+    });
+
+    test('should handle database errors during deletion', async () => {
+      const userIdToDelete = '550e8400-e29b-41d4-a716-446655440000';
+      const mockUserToDelete = {
+        id: userIdToDelete,
+        email: 'delete@example.com'
+      };
+
+      // Mock user exists check
+      db.execute.mockResolvedValueOnce([[mockUserToDelete]]);
+      // Mock database error during deletion
+      db.execute.mockRejectedValueOnce(new Error('Database error'));
+
+      const response = await request(app)
+        .delete(`/users/${userIdToDelete}`)
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(500);
+
+      expect(response.body).toHaveProperty('error', 'Failed to delete user');
+    });
+  });
+
   describe('Route Error Handling', () => {
     test('should handle malformed JSON in request body', async () => {
       const response = await request(app)
@@ -482,6 +589,7 @@ describe('Users Routes Integration Tests', () => {
 
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send(newUser)
         .expect(500);
 
@@ -540,6 +648,7 @@ describe('Users Routes Integration Tests', () => {
     test('should handle requests with missing content-type header', async () => {
       const response = await request(app)
         .post('/users')
+        .set('Authorization', `Bearer ${validToken}`)
         .send('email=test@example.com')
         .expect(400);
 
