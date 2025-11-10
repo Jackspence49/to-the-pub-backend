@@ -662,93 +662,53 @@ async function deleteBar(req, res) {
 }
 
 /**
- * GET /bars/search/name?q=searchterm&include=hours,tags
- * Searches for bars by name (case-insensitive) with optional related data
+ * GET /bars/search/name?q=searchterm
+ * Lightweight search for bars by name (case-insensitive) - returns only essential data
+ * Returns: bar UUID, name, and address information only
  */
 async function searchBarsByName(req, res) {
   try {
-    const { q: searchQuery, include } = req.query;
-    const includeOptions = include ? include.split(',').map(i => i.trim().toLowerCase()) : [];
+    const { q: searchQuery } = req.query;
     
     if (!searchQuery || searchQuery.trim().length === 0) {
       return res.status(400).json({ error: 'Search query parameter "q" is required' });
     }
     
-    const searchTerm = `%${searchQuery.trim()}%`;
+    // Normalize search term: remove special characters and convert to lowercase
+    const normalizedSearch = searchQuery.trim().toLowerCase().replace(/[^a-z0-9\s]/g, '');
+    const searchTerm = `%${normalizedSearch}%`;
     
-    // Build query with optional includes
-    let selectClauses = ['b.*'];
-    let joinClauses = [];
+    // Simple query - only essential fields with flexible search
+    const selectSql = `
+      SELECT 
+        b.id,
+        b.name,
+        b.address_street,
+        b.address_city,
+        b.address_state,
+        b.address_zip
+      FROM bars b
+      WHERE b.is_active = 1 
+      AND (
+        LOWER(REPLACE(REPLACE(b.name, '''', ''), '-', '')) LIKE ?
+        OR LOWER(b.name) LIKE LOWER(?)
+      )
+      ORDER BY 
+        CASE 
+          WHEN LOWER(b.name) LIKE LOWER(?) THEN 1
+          ELSE 2
+        END,
+        b.name
+    `;
     
-    if (includeOptions.includes('hours')) {
-      joinClauses.push('LEFT JOIN bar_hours bh ON b.id = bh.bar_id');
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed)
-      ) as hours`);
-    }
-    
-    if (includeOptions.includes('tags')) {
-      joinClauses.push('LEFT JOIN bar_tags bt ON b.id = bt.bar_id');
-      joinClauses.push('LEFT JOIN tags t ON bt.tag_id = t.id');
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(t.id, ':', t.name, ':', COALESCE(t.category, ''))
-      ) as tags`);
-    }
-    
-    let selectSql = `SELECT ${selectClauses.join(', ')} FROM bars b`;
-    if (joinClauses.length > 0) {
-      selectSql += ` ${joinClauses.join(' ')}`;
-    }
-    selectSql += ` WHERE b.is_active = 1 AND LOWER(b.name) LIKE LOWER(?)`;
-    
-    if (joinClauses.length > 0) {
-      selectSql += ` GROUP BY b.id`;
-    }
-    selectSql += ` ORDER BY b.name`;
-    
-    const [rows] = await db.query(selectSql, [searchTerm]);
-    
-    // Parse results if includes were specified
-    const bars = rows.map(bar => {
-      const result = { ...bar };
-      
-      if (includeOptions.includes('hours') && bar.hours) {
-        result.hours = bar.hours.split(',').map(h => {
-          const [day_of_week, open_time, close_time, is_closed] = h.split(':');
-          return {
-            day_of_week: parseInt(day_of_week),
-            open_time: open_time === 'null' ? null : open_time,
-            close_time: close_time === 'null' ? null : close_time,
-            is_closed: is_closed === '1'
-          };
-        });
-      } else if (includeOptions.includes('hours')) {
-        result.hours = [];
-      }
-      
-      if (includeOptions.includes('tags') && bar.tags) {
-        result.tags = bar.tags.split(',').map(t => {
-          const [id, name, category] = t.split(':');
-          return {
-            id,
-            name,
-            category: category || null
-          };
-        });
-      } else if (includeOptions.includes('tags')) {
-        result.tags = [];
-      }
-      
-      return result;
-    });
+    const [rows] = await db.query(selectSql, [searchTerm, `%${searchQuery.trim()}%`, `%${searchQuery.trim()}%`]);
     
     return res.json({ 
       success: true, 
-      data: bars,
+      data: rows,
       meta: {
         query: searchQuery,
-        count: bars.length,
-        included: includeOptions
+        count: rows.length
       }
     });
   } catch (err) {

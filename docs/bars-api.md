@@ -53,7 +53,7 @@ GET /api/bars
 
 **Query Parameters:**
 - `include` (optional) - Comma-separated list: `hours`, `tags`, `events`
-- `tag` (optional) - Filter by tag name (case-insensitive)
+- `tag` (optional) - Filter by tag name (case-insensitive) 
 - `open_now` (optional) - Filter by bars currently open (`true`/`false`)
 - `has_events` (optional) - Filter by bars with upcoming events (`true`/`false`)
 - `lat` (optional) - Latitude coordinate for geolocation search (required with `lon`)
