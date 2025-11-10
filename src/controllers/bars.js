@@ -115,22 +115,121 @@ async function createBar(req, res) {
 }
 
 /**
- * GET /bars?include=hours,tags,events
- * Returns all active bars with optional related data based on include parameter
+ * GET /bars?include=hours,tags,events&tag=sports&page=1&limit=20&lat=42.3601&lon=-71.0589&radius=5&unit=miles
+ * Returns all active bars with optional filtering and related data
  * Query parameters:
  * - include: comma-separated list of related data to include (hours, tags, events)
- * - limit: maximum number of results to return
- * - offset: number of results to skip for pagination
+ * - tag: filter by tag name (case-insensitive)
+ * - open_now: filter by bars currently open (true/false)
+ * - has_events: filter by bars with upcoming events (true/false)
+ * - page: page number for pagination (default: 1)
+ * - limit: maximum number of results per page (default: 20)
+ * - lat: latitude coordinate for geolocation search (required with lon)
+ * - lon: longitude coordinate for geolocation search (required with lat)
+ * - radius: search radius in specified unit (default: 5, max: 50)
+ * - unit: distance unit 'miles' or 'km' (default: 'miles')
  */
 async function getAllBars(req, res) {
   try {
-    const { include, limit, offset } = req.query;
+    const { 
+      include, 
+      tag, 
+      open_now, 
+      has_events, 
+      page = 1, 
+      limit = 20,
+      lat,
+      lon,
+      radius = 5,
+      unit = 'miles'
+    } = req.query;
+
+    // Geolocation parameter validation
+    if ((lat && !lon) || (!lat && lon)) {
+      return res.status(400).json({ error: 'Both lat and lon parameters must be provided together' });
+    }
+
+    if (lat && lon) {
+      const latitude = parseFloat(lat);
+      const longitude = parseFloat(lon);
+      
+      // Validate coordinate ranges
+      if (isNaN(latitude) || latitude < -90 || latitude > 90) {
+        return res.status(400).json({ error: 'Latitude must be a number between -90 and 90' });
+      }
+      
+      if (isNaN(longitude) || longitude < -180 || longitude > 180) {
+        return res.status(400).json({ error: 'Longitude must be a number between -180 and 180' });
+      }
+    }
+
+    // Validate radius
+    const radiusNum = parseFloat(radius);
+    if (isNaN(radiusNum) || radiusNum <= 0 || radiusNum > 50) {
+      return res.status(400).json({ error: 'Radius must be a number between 0 and 50' });
+    }
+
+    // Validate unit
+    if (!['miles', 'km'].includes(unit)) {
+      return res.status(400).json({ error: 'Unit must be either "miles" or "km"' });
+    }
+    
     const includeOptions = include ? include.split(',').map(i => i.trim().toLowerCase()) : [];
     
-    // Build base query
-    let selectSql = `SELECT b.* FROM bars b WHERE b.is_active = 1`;
+    // Build dynamic query
+    let selectClauses = ['DISTINCT b.*'];
     let joinClauses = [];
-    let selectClauses = ['b.*'];
+    let whereClauses = ['b.is_active = 1'];
+    let params = [];
+    let orderByClause = 'b.name';
+    
+    // Add distance calculation if lat/lon provided
+    if (lat && lon) {
+      const latitude = parseFloat(lat);
+      const longitude = parseFloat(lon);
+      
+      // Calculate distance using Haversine formula
+      // Formula: ACOS(SIN(RADIANS(lat1)) * SIN(RADIANS(lat2)) + COS(RADIANS(lat1)) * COS(RADIANS(lat2)) * COS(RADIANS(lon2) - RADIANS(lon1))) * 6371
+      const earthRadiusKm = 6371;
+      const earthRadiusMiles = 3959;
+      const earthRadius = unit === 'km' ? earthRadiusKm : earthRadiusMiles;
+      
+      const distanceFormula = `
+        (${earthRadius} * ACOS(
+          GREATEST(-1, LEAST(1,
+            SIN(RADIANS(?)) * SIN(RADIANS(b.latitude)) + 
+            COS(RADIANS(?)) * COS(RADIANS(b.latitude)) * 
+            COS(RADIANS(b.longitude) - RADIANS(?))
+          ))
+        ))
+      `;
+      
+      selectClauses.push(`${distanceFormula} AS distance`);
+      selectClauses.push(`'${unit}' AS distanceUnit`);
+      
+      // Only include bars within the specified radius and that have coordinates
+      whereClauses.push('b.latitude IS NOT NULL AND b.longitude IS NOT NULL');
+      whereClauses.push(`${distanceFormula} <= ?`);
+      
+      // Add parameters for distance calculation (lat, lat, lon for SELECT, lat, lat, lon for WHERE, radius)
+      params.push(latitude, latitude, longitude, latitude, latitude, longitude, radiusNum);
+      
+      // Sort by distance when using geolocation
+      orderByClause = 'distance ASC';
+    }
+    
+    // Add filter conditions
+    if (tag) {
+      joinClauses.push('INNER JOIN bar_tags bt_filter ON b.id = bt_filter.bar_id');
+      joinClauses.push('INNER JOIN tags t_filter ON bt_filter.tag_id = t_filter.id');
+      whereClauses.push('LOWER(t_filter.name) = LOWER(?)');
+      params.push(tag);
+    }
+    
+    if (has_events === 'true') {
+      joinClauses.push('INNER JOIN events e_filter ON b.id = e_filter.bar_id');
+      whereClauses.push('e_filter.is_active = 1 AND e_filter.event_date >= CURDATE()');
+    }
     
     // Add joins and select clauses based on include parameters
     if (includeOptions.includes('hours')) {
@@ -157,29 +256,51 @@ async function getAllBars(req, res) {
       ) as upcoming_events`);
     }
     
-    // Construct final query
-    selectSql = `SELECT ${selectClauses.join(', ')} FROM bars b`;
+    // Handle open_now filter (requires hours data)
+    if (open_now === 'true') {
+      if (!includeOptions.includes('hours')) {
+        // Need to add the join before constructing the query
+        joinClauses.push('LEFT JOIN bar_hours bh ON b.id = bh.bar_id');
+        selectClauses.push(`GROUP_CONCAT(
+          DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed)
+        ) as hours`);
+      }
+    }
+    
+    // Construct query
+    let selectSql = `SELECT ${selectClauses.join(', ')} FROM bars b`;
     if (joinClauses.length > 0) {
       selectSql += ` ${joinClauses.join(' ')}`;
     }
-    selectSql += ` WHERE b.is_active = 1`;
+    selectSql += ` WHERE ${whereClauses.join(' AND ')}`;
     
-    if (joinClauses.length > 0) {
+    if (includeOptions.length > 0 || tag || open_now === 'true') {
       selectSql += ` GROUP BY b.id`;
     }
     
-    selectSql += ` ORDER BY b.name`;
-    
-    // Add pagination if specified
-    const params = [];
-    if (limit) {
-      const limitNum = parseInt(limit);
-      const offsetNum = parseInt(offset) || 0;
-      selectSql += ` LIMIT ? OFFSET ?`;
-      params.push(limitNum, offsetNum);
+    // Add HAVING clause for open_now filter
+    if (open_now === 'true') {
+      selectSql += ` HAVING (
+        GROUP_CONCAT(DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed)) IS NOT NULL
+        AND DAYOFWEEK(NOW()) - 1 IN (
+          SELECT bh_check.day_of_week FROM bar_hours bh_check 
+          WHERE bh_check.bar_id = b.id 
+          AND bh_check.is_closed = 0
+          AND TIME(NOW()) BETWEEN bh_check.open_time AND bh_check.close_time
+        )
+      )`;
     }
     
-    const [rows] = await db.execute(selectSql, params);
+    selectSql += ` ORDER BY ${orderByClause}`;
+    
+    // Add pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+    selectSql += ` LIMIT ? OFFSET ?`;
+    params.push(limitNum, offset);
+    
+    const [rows] = await db.query(selectSql, params);
     
     // Parse the results based on what was included
     const bars = rows.map(bar => {
@@ -226,6 +347,12 @@ async function getAllBars(req, res) {
       } else if (includeOptions.includes('events')) {
         result.upcoming_events = [];
       }
+
+      // Include distance information if location-based search was used
+      if (lat && lon && bar.distance !== undefined) {
+        result.distance = parseFloat(bar.distance.toFixed(2));
+        result.distanceUnit = bar.distanceUnit;
+      }
       
       return result;
     });
@@ -235,9 +362,18 @@ async function getAllBars(req, res) {
       data: bars,
       meta: {
         count: bars.length,
-        included: includeOptions,
-        limit: limit ? parseInt(limit) : null,
-        offset: offset ? parseInt(offset) : 0
+        page: pageNum,
+        limit: limitNum,
+        filters: { 
+          tag, 
+          open_now, 
+          has_events, 
+          lat, 
+          lon, 
+          radius: req.query.radius || (lat && lon ? '5' : null), 
+          unit: req.query.unit || (lat && lon ? 'miles' : null) 
+        },
+        included: includeOptions
       }
     });
   } catch (err) {
@@ -298,7 +434,7 @@ async function getBar(req, res) {
       selectSql += ` GROUP BY b.id`;
     }
     
-    const [rows] = await db.execute(selectSql, [barId]);
+    const [rows] = await db.query(selectSql, [barId]);
     
     if (!rows || rows.length === 0) {
       return res.status(404).json({ error: 'Bar not found' });
@@ -570,7 +706,7 @@ async function searchBarsByName(req, res) {
     }
     selectSql += ` ORDER BY b.name`;
     
-    const [rows] = await db.execute(selectSql, [searchTerm]);
+    const [rows] = await db.query(selectSql, [searchTerm]);
     
     // Parse results if includes were specified
     const bars = rows.map(bar => {
@@ -621,183 +757,11 @@ async function searchBarsByName(req, res) {
   }
 }
 
-/**
- * GET /bars/filter?tag=sports&city=boston&include=hours,tags
- * Advanced filtering for bars with optional related data
- * Query parameters:
- * - tag: filter by tag name
- * - city: filter by city
- * - open_now: filter by bars currently open (true/false)
- * - has_events: filter by bars with upcoming events (true/false)
- * - include: comma-separated list of related data to include
- * - limit: maximum number of results
- * - offset: pagination offset
- */
-async function filterBars(req, res) {
-  try {
-    const { tag, city, open_now, has_events, include, limit, offset } = req.query;
-    const includeOptions = include ? include.split(',').map(i => i.trim().toLowerCase()) : [];
-    
-    // Build dynamic query
-    let selectClauses = ['DISTINCT b.*'];
-    let joinClauses = [];
-    let whereClauses = ['b.is_active = 1'];
-    let params = [];
-    
-    // Add filters
-    if (tag) {
-      joinClauses.push('INNER JOIN bar_tags bt_filter ON b.id = bt_filter.bar_id');
-      joinClauses.push('INNER JOIN tags t_filter ON bt_filter.tag_id = t_filter.id');
-      whereClauses.push('LOWER(t_filter.name) = LOWER(?)');
-      params.push(tag);
-    }
-    
-    if (city) {
-      whereClauses.push('LOWER(b.address_city) = LOWER(?)');
-      params.push(city);
-    }
-    
-    if (has_events === 'true') {
-      joinClauses.push('INNER JOIN events e_filter ON b.id = e_filter.bar_id');
-      whereClauses.push('e_filter.is_active = 1 AND e_filter.event_date >= CURDATE()');
-    }
-    
-    // Add includes
-    if (includeOptions.includes('hours')) {
-      joinClauses.push('LEFT JOIN bar_hours bh ON b.id = bh.bar_id');
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed)
-      ) as hours`);
-    }
-    
-    if (includeOptions.includes('tags')) {
-      joinClauses.push('LEFT JOIN bar_tags bt ON b.id = bt.bar_id');
-      joinClauses.push('LEFT JOIN tags t ON bt.tag_id = t.id');
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(t.id, ':', t.name, ':', COALESCE(t.category, ''))
-      ) as tags`);
-    }
-    
-    if (includeOptions.includes('events')) {
-      joinClauses.push(`LEFT JOIN events e ON b.id = e.bar_id 
-        AND e.is_active = 1 
-        AND e.event_date >= CURDATE()`);
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(e.id, ':', e.name, ':', e.event_date, ':', COALESCE(e.start_time, ''), ':', COALESCE(e.event_type, ''))
-      ) as upcoming_events`);
-    }
-    
-    // Construct query
-    let selectSql = `SELECT ${selectClauses.join(', ')} FROM bars b`;
-    if (joinClauses.length > 0) {
-      selectSql += ` ${joinClauses.join(' ')}`;
-    }
-    selectSql += ` WHERE ${whereClauses.join(' AND ')}`;
-    
-    if (includeOptions.length > 0 || tag) {
-      selectSql += ` GROUP BY b.id`;
-    }
-    
-    // Handle open_now filter (requires hours data)
-    if (open_now === 'true') {
-      if (!includeOptions.includes('hours')) {
-        joinClauses.push('LEFT JOIN bar_hours bh_open ON b.id = bh_open.bar_id');
-      }
-      selectSql += ` HAVING (
-        GROUP_CONCAT(DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed)) IS NOT NULL
-        AND DAYOFWEEK(NOW()) - 1 IN (
-          SELECT bh_check.day_of_week FROM bar_hours bh_check 
-          WHERE bh_check.bar_id = b.id 
-          AND bh_check.is_closed = 0
-          AND TIME(NOW()) BETWEEN bh_check.open_time AND bh_check.close_time
-        )
-      )`;
-    }
-    
-    selectSql += ` ORDER BY b.name`;
-    
-    // Add pagination
-    if (limit) {
-      const limitNum = parseInt(limit);
-      const offsetNum = parseInt(offset) || 0;
-      selectSql += ` LIMIT ? OFFSET ?`;
-      params.push(limitNum, offsetNum);
-    }
-    
-    const [rows] = await db.execute(selectSql, params);
-    
-    // Parse results
-    const bars = rows.map(bar => {
-      const result = { ...bar };
-      
-      if (includeOptions.includes('hours') && bar.hours) {
-        result.hours = bar.hours.split(',').map(h => {
-          const [day_of_week, open_time, close_time, is_closed] = h.split(':');
-          return {
-            day_of_week: parseInt(day_of_week),
-            open_time: open_time === 'null' ? null : open_time,
-            close_time: close_time === 'null' ? null : close_time,
-            is_closed: is_closed === '1'
-          };
-        });
-      } else if (includeOptions.includes('hours')) {
-        result.hours = [];
-      }
-      
-      if (includeOptions.includes('tags') && bar.tags) {
-        result.tags = bar.tags.split(',').map(t => {
-          const [id, name, category] = t.split(':');
-          return {
-            id,
-            name,
-            category: category || null
-          };
-        });
-      } else if (includeOptions.includes('tags')) {
-        result.tags = [];
-      }
-      
-      if (includeOptions.includes('events') && bar.upcoming_events) {
-        result.upcoming_events = bar.upcoming_events.split(',').map(e => {
-          const [id, name, event_date, start_time, event_type] = e.split(':');
-          return {
-            id,
-            name,
-            event_date,
-            start_time: start_time || null,
-            event_type: event_type || null
-          };
-        });
-      } else if (includeOptions.includes('events')) {
-        result.upcoming_events = [];
-      }
-      
-      return result;
-    });
-    
-    return res.json({ 
-      success: true, 
-      data: bars,
-      meta: {
-        count: bars.length,
-        filters: { tag, city, open_now, has_events },
-        included: includeOptions,
-        limit: limit ? parseInt(limit) : null,
-        offset: offset ? parseInt(offset) : 0
-      }
-    });
-  } catch (err) {
-    console.error('Error filtering bars:', err.message || err);
-    return res.status(500).json({ error: 'Failed to filter bars' });
-  }
-}
-
 module.exports = {
   createBar,
   getAllBars,
   getBar,
   updateBar,
   deleteBar,
-  searchBarsByName,
-  filterBars
+  searchBarsByName
 };

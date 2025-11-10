@@ -35,7 +35,7 @@ async function getBarsWithDetails() {
  * 3. Get all bars with pagination and all related data
  */
 async function getBarsWithPagination() {
-  const response = await fetch(`${BASE_URL}/bars?include=hours,tags,events&limit=10&offset=0`);
+  const response = await fetch(`${BASE_URL}/bars?include=hours,tags,events&page=1&limit=10`);
   const data = await response.json();
   
   console.log('First 10 bars with all data:', data);
@@ -79,7 +79,7 @@ async function getSingleBarWithEvents(barId) {
  * 7. Filter bars by tag
  */
 async function getSportsBars() {
-  const response = await fetch(`${BASE_URL}/bars/filter?tag=Sports%20Bar&include=hours`);
+  const response = await fetch(`${BASE_URL}/bars?tag=Sports%20Bar&include=hours`);
   const data = await response.json();
   
   console.log('Sports bars with hours:', data);
@@ -90,7 +90,7 @@ async function getSportsBars() {
  * 8. Filter bars by city with all details
  */
 async function getBostonBars() {
-  const response = await fetch(`${BASE_URL}/bars/filter?city=boston&include=hours,tags,events`);
+  const response = await fetch(`${BASE_URL}/bars?city=boston&include=hours,tags,events`);
   const data = await response.json();
   
   console.log('Boston bars with full details:', data);
@@ -101,7 +101,7 @@ async function getBostonBars() {
  * 9. Get bars that are currently open
  */
 async function getCurrentlyOpenBars() {
-  const response = await fetch(`${BASE_URL}/bars/filter?open_now=true&include=hours`);
+  const response = await fetch(`${BASE_URL}/bars?open_now=true&include=hours`);
   const data = await response.json();
   
   console.log('Currently open bars:', data);
@@ -112,7 +112,7 @@ async function getCurrentlyOpenBars() {
  * 10. Get bars with upcoming events
  */
 async function getBarsWithEvents() {
-  const response = await fetch(`${BASE_URL}/bars/filter?has_events=true&include=events`);
+  const response = await fetch(`${BASE_URL}/bars?has_events=true&include=events`);
   const data = await response.json();
   
   console.log('Bars with upcoming events:', data);
@@ -130,7 +130,7 @@ async function getOpenSportsBarsInBoston() {
     include: 'hours,tags,events'
   });
   
-  const response = await fetch(`${BASE_URL}/bars/filter?${params}`);
+  const response = await fetch(`${BASE_URL}/bars?${params}`);
   const data = await response.json();
   
   console.log('Open sports bars in Boston:', data);
@@ -152,20 +152,19 @@ async function searchIrishPubs() {
  * 13. Paginated search with filtering
  */
 async function getPaginatedBostonBars(page = 1, pageSize = 5) {
-  const offset = (page - 1) * pageSize;
   const params = new URLSearchParams({
     city: 'boston',
     include: 'hours,tags',
-    limit: pageSize.toString(),
-    offset: offset.toString()
+    page: page.toString(),
+    limit: pageSize.toString()
   });
   
-  const response = await fetch(`${BASE_URL}/bars/filter?${params}`);
+  const response = await fetch(`${BASE_URL}/bars?${params}`);
   const data = await response.json();
   
   console.log(`Page ${page} of Boston bars:`, data);
   // Paginated results with metadata
-  console.log(`Showing ${data.meta.count} results (limit: ${data.meta.limit}, offset: ${data.meta.offset})`);
+  console.log(`Showing ${data.meta.count} results (page: ${data.meta.page}, limit: ${data.meta.limit})`);
 }
 
 // Example usage patterns for different scenarios
@@ -195,7 +194,7 @@ async function searchBars({ query, city, tag, includeHours = false, includeEvent
     url += '/search/name';
     params.set('q', query);
   } else {
-    url += '/filter';
+    // Use main bars endpoint with filter parameters
     if (city) params.set('city', city);
     if (tag) params.set('tag', tag);
   }
@@ -233,7 +232,7 @@ async function getBarsForMap() {
  */
 async function getOpenBarsNearby(userCity) {
   const response = await fetch(
-    `${BASE_URL}/bars/filter?city=${encodeURIComponent(userCity)}&open_now=true&include=hours,tags`
+    `${BASE_URL}/bars?city=${encodeURIComponent(userCity)}&open_now=true&include=hours,tags`
   );
   return response.json();
 }
@@ -242,7 +241,7 @@ async function getOpenBarsNearby(userCity) {
  * Event Discovery Feature  
  */
 async function getUpcomingEvents() {
-  const response = await fetch(`${BASE_URL}/bars/filter?has_events=true&include=events`);
+  const response = await fetch(`${BASE_URL}/bars?has_events=true&include=events`);
   const data = await response.json();
   
   // Flatten events across all bars

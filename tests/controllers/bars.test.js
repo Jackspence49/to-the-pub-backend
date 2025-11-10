@@ -41,6 +41,7 @@ describe('Bars Controller Tests', () => {
 
     // Mock database methods
     db.execute = jest.fn();
+    db.query = jest.fn();
     db.getConnection = jest.fn().mockResolvedValue(mockConnection);
   });
 
@@ -67,10 +68,10 @@ describe('Bars Controller Tests', () => {
         }
       ];
 
-      db.execute.mockResolvedValue([mockBars]);
+      db.query.mockResolvedValue([mockBars]);
 
       const response = await request(app)
-        .get('/bars')
+        .get('/bars?include=hours,tags')
         .expect(200);
 
       expect(response.body.success).toBe(true);
@@ -81,7 +82,7 @@ describe('Bars Controller Tests', () => {
     });
 
     test('should return empty array when no bars exist', async () => {
-      db.execute.mockResolvedValue([[]]);
+      db.query.mockResolvedValue([[]]);
 
       const response = await request(app)
         .get('/bars')
@@ -99,6 +100,126 @@ describe('Bars Controller Tests', () => {
         .expect(500);
 
       expect(response.body.error).toBe('Failed to fetch bars');
+    });
+  });
+
+  describe('GET /bars - Geolocation Features', () => {
+    test('should return bars within specified radius with distance data', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Nearby Bar',
+          address_street: '123 Test St',
+          address_city: 'Test City',
+          address_state: 'TX',
+          address_zip: '12345',
+          latitude: 42.3601,
+          longitude: -71.0589,
+          distance: 2.5,
+          distanceUnit: 'miles'
+        }
+      ];
+
+      db.execute.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=42.3601&lon=-71.0589&radius=5&unit=miles')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.data[0].distance).toBe(2.5);
+      expect(response.body.data[0].distanceUnit).toBe('miles');
+      expect(response.body.meta.filters.lat).toBe('42.3601');
+      expect(response.body.meta.filters.lon).toBe('-71.0589');
+      expect(response.body.meta.filters.radius).toBe('5');
+      expect(response.body.meta.filters.unit).toBe('miles');
+    });
+
+    test('should validate that lat and lon are provided together', async () => {
+      const response = await request(app)
+        .get('/bars?lat=42.3601')
+        .expect(400);
+
+      expect(response.body.error).toBe('Both lat and lon parameters must be provided together');
+    });
+
+    test('should validate latitude range', async () => {
+      const response = await request(app)
+        .get('/bars?lat=95&lon=-71.0589')
+        .expect(400);
+
+      expect(response.body.error).toBe('Latitude must be a number between -90 and 90');
+    });
+
+    test('should validate longitude range', async () => {
+      const response = await request(app)
+        .get('/bars?lat=42.3601&lon=185')
+        .expect(400);
+
+      expect(response.body.error).toBe('Longitude must be a number between -180 and 180');
+    });
+
+    test('should validate radius range', async () => {
+      const response = await request(app)
+        .get('/bars?lat=42.3601&lon=-71.0589&radius=55')
+        .expect(400);
+
+      expect(response.body.error).toBe('Radius must be a number between 0 and 50');
+    });
+
+    test('should validate unit parameter', async () => {
+      const response = await request(app)
+        .get('/bars?lat=42.3601&lon=-71.0589&unit=feet')
+        .expect(400);
+
+      expect(response.body.error).toBe('Unit must be either "miles" or "km"');
+    });
+
+    test('should use default radius and unit when not specified', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Nearby Bar',
+          latitude: 42.3601,
+          longitude: -71.0589,
+          distance: 3.2,
+          distanceUnit: 'miles'
+        }
+      ];
+
+      db.execute.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=42.3601&lon=-71.0589')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.meta.filters.radius).toBe('5');
+      expect(response.body.meta.filters.unit).toBe('miles');
+    });
+
+    test('should work with kilometers unit', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Nearby Bar',
+          latitude: 42.3601,
+          longitude: -71.0589,
+          distance: 4.8,
+          distanceUnit: 'km'
+        }
+      ];
+
+      db.execute.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=42.3601&lon=-71.0589&radius=10&unit=km')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data[0].distance).toBe(4.8);
+      expect(response.body.data[0].distanceUnit).toBe('km');
     });
   });
 

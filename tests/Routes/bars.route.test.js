@@ -226,7 +226,7 @@ describe('Bars Routes Integration Tests', () => {
     });
   });
 
-  describe('GET /bars/filter - Public Route', () => {
+  describe('GET /bars - Public Route with Filtering', () => {
     test('should filter bars by tag without authentication', async () => {
       const mockBars = [
         {
@@ -238,10 +238,10 @@ describe('Bars Routes Integration Tests', () => {
         }
       ];
 
-      db.execute.mockResolvedValueOnce([mockBars]);
+      db.query.mockResolvedValueOnce([mockBars]);
 
       const response = await request(app)
-        .get('/bars/filter')
+        .get('/bars')
         .query({ tag: 'Sports Bar' })
         .expect(200);
 
@@ -265,7 +265,7 @@ describe('Bars Routes Integration Tests', () => {
       db.execute.mockResolvedValueOnce([mockBars]);
 
       const response = await request(app)
-        .get('/bars/filter')
+        .get('/bars')
         .query({ city: 'boston' })
         .expect(200);
 
@@ -285,7 +285,7 @@ describe('Bars Routes Integration Tests', () => {
       db.execute.mockResolvedValueOnce([mockBars]);
 
       const response = await request(app)
-        .get('/bars/filter')
+        .get('/bars')
         .query({ has_events: 'true' })
         .expect(200);
 
@@ -308,7 +308,7 @@ describe('Bars Routes Integration Tests', () => {
       db.execute.mockResolvedValueOnce([mockBars]);
 
       const response = await request(app)
-        .get('/bars/filter')
+        .get('/bars')
         .query({ 
           city: 'boston', 
           tag: 'Sports Bar',
@@ -326,11 +326,35 @@ describe('Bars Routes Integration Tests', () => {
       expect(response.body.data[0]).toHaveProperty('tags');
     });
 
+    test('should handle pagination with page and limit parameters', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Test Bar 1',
+          is_active: 1
+        }
+      ];
+
+      db.execute.mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars')
+        .query({ 
+          page: 2,
+          limit: 10
+        })
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.meta.page).toBe(2);
+      expect(response.body.meta.limit).toBe(10);
+    });
+
     test('should handle empty filter results', async () => {
       db.execute.mockResolvedValueOnce([[]]);
 
       const response = await request(app)
-        .get('/bars/filter')
+        .get('/bars')
         .query({ tag: 'NonexistentTag' })
         .expect(200);
 
@@ -339,15 +363,15 @@ describe('Bars Routes Integration Tests', () => {
       expect(response.body.meta.count).toBe(0);
     });
 
-    test('should handle database errors in filter', async () => {
+    test('should handle database errors in filtering', async () => {
       db.execute.mockRejectedValueOnce(new Error('Database connection failed'));
 
       const response = await request(app)
-        .get('/bars/filter')
+        .get('/bars')
         .query({ city: 'boston' })
         .expect(500);
 
-      expect(response.body).toHaveProperty('error', 'Failed to filter bars');
+      expect(response.body).toHaveProperty('error', 'Failed to fetch bars');
     });
   });
 

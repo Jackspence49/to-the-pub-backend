@@ -15,9 +15,8 @@ Before using protected endpoints, you must authenticate through the User Authent
 See the [User Authentication API](#user-authentication-api) section below for complete details.
 
 ### Public Endpoints (No Authentication Required)
-- `GET /api/bars` - List all bars
+- `GET /api/bars` - List all bars (supports filtering)
 - `GET /api/bars/:id` - Get single bar
-- `GET /api/bars/filter` - Filter bars
 - `GET /api/bars/search/name` - Search bars by name
 
 ### Protected Endpoints (JWT Token Required)
@@ -42,7 +41,7 @@ Most GET endpoints support an `include` query parameter that allows you to speci
 ```
 GET /api/bars?include=hours,tags
 GET /api/bars/123?include=hours,tags,events
-GET /api/bars/filter?tag=sports&include=hours
+GET /api/bars?tag=sports&include=hours
 ```
 
 ## Endpoints
@@ -54,8 +53,15 @@ GET /api/bars
 
 **Query Parameters:**
 - `include` (optional) - Comma-separated list: `hours`, `tags`, `events`
-- `limit` (optional) - Maximum number of results to return
-- `offset` (optional) - Number of results to skip for pagination
+- `tag` (optional) - Filter by tag name (case-insensitive)
+- `open_now` (optional) - Filter by bars currently open (`true`/`false`)
+- `has_events` (optional) - Filter by bars with upcoming events (`true`/`false`)
+- `lat` (optional) - Latitude coordinate for geolocation search (required with `lon`)
+- `lon` (optional) - Longitude coordinate for geolocation search (required with `lat`)
+- `radius` (optional) - Search radius in specified unit (default: 5, max: 50)
+- `unit` (optional) - Distance unit: `miles` or `km` (default: `miles`)
+- `page` (optional) - Page number for pagination (default: 1)
+- `limit` (optional) - Maximum number of results per page (default: 20)
 
 **Examples:**
 ```bash
@@ -66,7 +72,26 @@ GET /api/bars
 GET /api/bars?include=hours,tags
 
 # Include all related data with pagination
-GET /api/bars?include=hours,tags,events&limit=10&offset=0
+GET /api/bars?include=hours,tags,events&page=1&limit=10
+
+# Filter by tag
+GET /api/bars?tag=Sports%20Bar&include=hours
+
+# Multiple filters
+GET /api/bars?tag=Sports%20Bar&open_now=true&include=hours,tags
+
+# Get bars with upcoming events
+GET /api/bars?has_events=true&include=events
+
+# Geolocation-based searches
+# Find bars within 5 miles of coordinates (Boston area)
+GET /api/bars?lat=42.3601&lon=-71.0589&radius=5&unit=miles&include=hours,tags
+
+# Find bars within 10 kilometers with events
+GET /api/bars?lat=42.3601&lon=-71.0589&radius=10&unit=km&has_events=true&include=events
+
+# Find nearby sports bars
+GET /api/bars?lat=42.3601&lon=-71.0589&radius=3&tag=Sports%20Bar&include=hours
 ```
 
 **Response:**
@@ -114,14 +139,25 @@ GET /api/bars?include=hours,tags,events&limit=10&offset=0
           "start_time": "19:00:00",
           "event_type": "trivia"
         }
-      ]
+      ],
+      "distance": 2.34,
+      "distanceUnit": "miles"
     }
   ],
   "meta": {
     "count": 1,
-    "included": ["hours", "tags", "events"],
-    "limit": null,
-    "offset": 0
+    "page": 1,
+    "limit": 20,
+    "filters": {
+      "tag": null,
+      "open_now": null,
+      "has_events": null,
+      "lat": "42.3601",
+      "lon": "-71.0589",
+      "radius": "5",
+      "unit": "miles"
+    },
+    "included": ["hours", "tags", "events"]
   }
 }
 ```
@@ -147,36 +183,7 @@ GET /api/bars/bar-uuid?include=
 GET /api/bars/bar-uuid?include=hours,events
 ```
 
-### 3. Filter Bars
-```
-GET /api/bars/filter
-```
-
-**Query Parameters:**
-- `tag` (optional) - Filter by tag name (case-insensitive)
-- `city` (optional) - Filter by city (case-insensitive)
-- `open_now` (optional) - Filter by bars currently open (`true`/`false`)
-- `has_events` (optional) - Filter by bars with upcoming events (`true`/`false`)
-- `include` (optional) - Comma-separated list: `hours`, `tags`, `events`
-- `limit` (optional) - Maximum number of results
-- `offset` (optional) - Pagination offset
-
-**Examples:**
-```bash
-# Sports bars in Boston with hours
-GET /api/bars/filter?tag=Sports%20Bar&city=boston&include=hours
-
-# Bars currently open with their hours and events
-GET /api/bars/filter?open_now=true&include=hours,events
-
-# Bars with upcoming events
-GET /api/bars/filter?has_events=true&include=events
-
-# Multiple filters with pagination
-GET /api/bars/filter?city=boston&has_events=true&include=hours,tags,events&limit=5&offset=0
-```
-
-### 4. Search Bars by Name
+### 3. Search Bars by Name
 ```
 GET /api/bars/search/name
 ```
@@ -196,7 +203,7 @@ GET /api/bars/search/name?q=pub&include=hours,tags
 
 ## Protected Endpoints (Authentication Required)
 
-### 5. Create New Bar
+### 4. Create New Bar
 ```
 POST /api/bars
 ```
@@ -261,7 +268,7 @@ POST /api/bars
 - `409` - Bar with same name and address already exists
 - `500` - Server error
 
-### 6. Update Existing Bar
+### 5. Update Existing Bar
 ```
 PUT /api/bars/:id
 ```
@@ -313,7 +320,7 @@ All fields are optional. Only provided fields will be updated:
 - `409` - Updated data would create duplicate bar
 - `500` - Server error
 
-### 7. Delete Bar (Soft Delete)
+### 6. Delete Bar (Soft Delete)
 ```
 DELETE /api/bars/:id
 ```
@@ -375,12 +382,78 @@ DELETE /api/bars/:id
 }
 ```
 
+## Geolocation Features
+
+The Bars API supports location-based searches to find bars near a specific geographic coordinate.
+
+### Location Parameters
+
+- **lat** (decimal, required with lon) - Latitude coordinate (-90 to 90)
+- **lon** (decimal, required with lat) - Longitude coordinate (-180 to 180)  
+- **radius** (decimal, optional) - Search radius (default: 5, max: 50)
+- **unit** (string, optional) - Distance unit: 'miles' or 'km' (default: 'miles')
+
+### Validation Rules
+
+- `lat` and `lon` must be provided together or not at all
+- Latitude must be between -90 and 90 degrees
+- Longitude must be between -180 and 180 degrees
+- Radius must be between 0 and 50 (to prevent abuse)
+- Unit must be either 'miles' or 'km'
+
+### Response Format
+
+When location parameters are provided:
+- Results are sorted by distance (nearest first) instead of alphabetically
+- Each bar includes `distance` and `distanceUnit` fields
+- Only bars with valid coordinates are returned
+- Distance calculation uses the Haversine formula for accuracy
+
+### Examples
+
+```bash
+# Find bars within 3 miles of downtown Boston
+GET /api/bars?lat=42.3601&lon=-71.0589&radius=3&unit=miles
+
+# Find sports bars within 10 km
+GET /api/bars?lat=42.3601&lon=-71.0589&radius=10&unit=km&tag=Sports%20Bar
+
+# Find nearby bars with events (default 5 mile radius)
+GET /api/bars?lat=42.3601&lon=-71.0589&has_events=true&include=events
+```
+
+### Error Responses
+
+```json
+{
+  "error": "Both lat and lon parameters must be provided together"
+}
+
+{
+  "error": "Latitude must be a number between -90 and 90"
+}
+
+{
+  "error": "Longitude must be a number between -180 and 180"
+}
+
+{
+  "error": "Radius must be a number between 0 and 50"
+}
+
+{
+  "error": "Unit must be either \"miles\" or \"km\""
+}
+```
+
 ## Performance Notes
 
 - Only request the data you need using the `include` parameter
 - Use pagination (`limit` and `offset`) for large result sets
 - The `open_now` filter requires hours data and may be slower
 - Filtering by tags or events uses inner joins and may be more efficient than client-side filtering
+- Geolocation searches use database geospatial functions for optimal performance
+- Geolocation queries automatically filter out bars without coordinate data
 
 ## Error Responses
 
@@ -441,8 +514,46 @@ async function searchBars(query, includeHours = false) {
 
 // Filter bars currently open
 async function getOpenBars() {
-  const response = await fetch('/api/bars/filter?open_now=true&include=hours');
+  const response = await fetch('/api/bars?open_now=true&include=hours');
   return response.json();
+}
+
+// Geolocation-based search
+async function getNearbyBars(lat, lon, radius = 5, unit = 'miles') {
+  const response = await fetch(
+    `/api/bars?lat=${lat}&lon=${lon}&radius=${radius}&unit=${unit}&include=hours,tags`
+  );
+  return response.json();
+}
+
+// Find nearby bars with specific criteria
+async function findNearbyOpenBars(lat, lon, radius = 3) {
+  const response = await fetch(
+    `/api/bars?lat=${lat}&lon=${lon}&radius=${radius}&open_now=true&include=hours`
+  );
+  return response.json();
+}
+
+// Get user's location and find nearby bars
+async function getBarsNearUser() {
+  if (!navigator.geolocation) {
+    throw new Error('Geolocation not supported');
+  }
+  
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        try {
+          const bars = await getNearbyBars(latitude, longitude, 10);
+          resolve(bars);
+        } catch (error) {
+          reject(error);
+        }
+      },
+      (error) => reject(error)
+    );
+  });
 }
 ```
 
@@ -509,9 +620,9 @@ async function deleteBar(barId, token) {
 
 ```javascript
 // Find bars near user's location with events
-async function getNearbyBarsWithEvents(city) {
+async function getNearbyBarsWithEvents(lat, lon, radius = 5) {
   const response = await fetch(
-    `/api/bars/filter?city=${encodeURIComponent(city)}&has_events=true&include=events`
+    `/api/bars?lat=${lat}&lon=${lon}&radius=${radius}&has_events=true&include=events`
   );
   const data = await response.json();
   
@@ -524,9 +635,9 @@ async function getNearbyBarsWithEvents(city) {
 }
 
 // Get bars open right now
-async function getOpenBarsNow(city) {
+async function getOpenBarsNow(lat, lon, radius = 10) {
   const response = await fetch(
-    `/api/bars/filter?city=${encodeURIComponent(city)}&open_now=true&include=hours,tags`
+    `/api/bars?lat=${lat}&lon=${lon}&radius=${radius}&open_now=true&include=hours,tags`
   );
   return response.json();
 }
@@ -545,7 +656,26 @@ curl "http://localhost:3000/api/bars?include=hours,tags"
 curl "http://localhost:3000/api/bars/search/name?q=irish&include=hours"
 
 # Get sports bars in Boston
-curl "http://localhost:3000/api/bars/filter?tag=Sports%20Bar&city=boston"
+curl "http://localhost:3000/api/bars?tag=Sports%20Bar"
+
+# Get bars currently open
+curl "http://localhost:3000/api/bars?open_now=true&include=hours"
+
+# Get bars with upcoming events
+curl "http://localhost:3000/api/bars?has_events=true&include=events"
+
+# Multiple filters with pagination
+curl "http://localhost:3000/api/bars?has_events=true&include=hours,tags&page=1&limit=5"
+
+# Geolocation-based searches
+# Find bars within 5 miles of coordinates (Boston area)
+curl "http://localhost:3000/api/bars?lat=42.3601&lon=-71.0589&radius=5&unit=miles&include=hours,tags"
+
+# Find bars within 10 kilometers with events
+curl "http://localhost:3000/api/bars?lat=42.3601&lon=-71.0589&radius=10&unit=km&has_events=true&include=events"
+
+# Find nearby sports bars with default radius (5 miles)
+curl "http://localhost:3000/api/bars?lat=42.3601&lon=-71.0589&tag=Sports%20Bar&include=hours"
 
 # Get a specific bar with all details
 curl "http://localhost:3000/api/bars/bar-uuid?include=hours,tags,events"

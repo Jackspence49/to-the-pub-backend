@@ -6,10 +6,9 @@
 ## Public Endpoints (No Auth)
 | Method | Endpoint | Description | Key Parameters |
 |--------|----------|-------------|----------------|
-| GET | `/bars` | List all bars | `include`, `limit`, `offset` |
+| GET | `/bars` | List all bars with filtering | `include`, `tag`, `city`, `open_now`, `has_events`, `page`, `limit` |
 | GET | `/bars/:id` | Get single bar | `include` (default: `hours,tags`) |
 | GET | `/bars/search/name` | Search by name | `q` (required), `include` |
-| GET | `/bars/filter` | Advanced filtering | `tag`, `city`, `open_now`, `has_events`, `include` |
 
 ## Protected Endpoints (JWT Required)
 | Method | Endpoint | Description | Auth Header |
@@ -54,12 +53,17 @@ GET /api/bars/search/name?q=irish&include=tags
 
 ### Find sports bars in Boston
 ```bash
-GET /api/bars/filter?tag=Sports%20Bar&city=boston&include=hours
+GET /api/bars?tag=Sports%20Bar&city=boston&include=hours
 ```
 
 ### Get currently open bars
 ```bash
-GET /api/bars/filter?open_now=true&include=hours
+GET /api/bars?open_now=true&include=hours
+```
+
+### Get bars with events (paginated)
+```bash
+GET /api/bars?has_events=true&include=events&page=1&limit=10
 ```
 
 ### Create a new bar
@@ -96,7 +100,7 @@ Authorization: Bearer <token>
 
 ## Performance Tips
 - Use `include` parameter selectively
-- Implement pagination with `limit`/`offset`
+- Implement pagination with `page`/`limit` parameters
 - Cache frequently accessed data
 - Use specific filters to reduce result sets
 
