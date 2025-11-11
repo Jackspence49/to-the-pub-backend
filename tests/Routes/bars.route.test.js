@@ -671,4 +671,247 @@ describe('Bars Routes Integration Tests', () => {
       expect(response.headers['content-type']).toMatch(/application\/json/);
     });
   });
+
+  describe('POST /bars/:barId/tags/:tagId - Add Tag to Bar', () => {
+    test('should add tag to bar with valid authentication', async () => {
+      // Mock bar exists check
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1' }]]);
+      // Mock tag exists check
+      db.execute.mockResolvedValueOnce([[{ id: 'tag-1' }]]);
+      // Mock relationship doesn't exist check
+      db.execute.mockResolvedValueOnce([[]]);
+      // Mock successful insert
+      db.execute.mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+      const response = await request(app)
+        .post('/bars/bar-1/tags/tag-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(201);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('message', 'Tag added to bar successfully');
+      expect(response.body.data).toHaveProperty('bar_id', 'bar-1');
+      expect(response.body.data).toHaveProperty('tag_id', 'tag-1');
+    });
+
+    test('should reject request without authentication', async () => {
+      const response = await request(app)
+        .post('/bars/bar-1/tags/tag-1')
+        .expect(401);
+
+      expect(response.body).toHaveProperty('success', false);
+    });
+
+    test('should return 404 for non-existent bar', async () => {
+      // Mock bar doesn't exist
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .post('/bars/nonexistent-bar/tags/tag-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Bar not found');
+    });
+
+    test('should return 404 for non-existent tag', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1' }]]);
+      // Mock tag doesn't exist
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .post('/bars/bar-1/tags/nonexistent-tag')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Tag not found');
+    });
+
+    test('should return 409 when tag already associated with bar', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1' }]]);
+      // Mock tag exists
+      db.execute.mockResolvedValueOnce([[{ id: 'tag-1' }]]);
+      // Mock relationship already exists
+      db.execute.mockResolvedValueOnce([[{ bar_id: 'bar-1', tag_id: 'tag-1' }]]);
+
+      const response = await request(app)
+        .post('/bars/bar-1/tags/tag-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(409);
+
+      expect(response.body).toHaveProperty('error', 'Tag is already associated with this bar');
+    });
+  });
+
+  describe('DELETE /bars/:barId/tags/:tagId - Remove Tag from Bar', () => {
+    test('should remove tag from bar with valid authentication', async () => {
+      // Mock bar exists check
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1' }]]);
+      // Mock tag exists check
+      db.execute.mockResolvedValueOnce([[{ id: 'tag-1' }]]);
+      // Mock relationship exists check
+      db.execute.mockResolvedValueOnce([[{ bar_id: 'bar-1', tag_id: 'tag-1' }]]);
+      // Mock successful delete
+      db.execute.mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+      const response = await request(app)
+        .delete('/bars/bar-1/tags/tag-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body).toHaveProperty('message', 'Tag removed from bar successfully');
+      expect(response.body.data).toHaveProperty('bar_id', 'bar-1');
+      expect(response.body.data).toHaveProperty('tag_id', 'tag-1');
+    });
+
+    test('should reject request without authentication', async () => {
+      const response = await request(app)
+        .delete('/bars/bar-1/tags/tag-1')
+        .expect(401);
+
+      expect(response.body).toHaveProperty('success', false);
+    });
+
+    test('should return 404 for non-existent bar', async () => {
+      // Mock bar doesn't exist
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .delete('/bars/nonexistent-bar/tags/tag-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Bar not found');
+    });
+
+    test('should return 404 for non-existent tag', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1' }]]);
+      // Mock tag doesn't exist
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .delete('/bars/bar-1/tags/nonexistent-tag')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Tag not found');
+    });
+
+    test('should return 404 when tag not associated with bar', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1' }]]);
+      // Mock tag exists
+      db.execute.mockResolvedValueOnce([[{ id: 'tag-1' }]]);
+      // Mock relationship doesn't exist
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .delete('/bars/bar-1/tags/tag-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Tag is not associated with this bar');
+    });
+  });
+
+  describe('GET /bars/:barId/tags - Get Bar Tags', () => {
+    test('should get all tags for a bar without authentication', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1', name: 'Test Bar' }]]);
+      // Mock tags query
+      const mockTags = [
+        {
+          id: 'tag-1',
+          name: 'Sports Bar',
+          category: 'Atmosphere',
+          created_at: new Date('2024-01-01'),
+          updated_at: new Date('2024-01-01')
+        },
+        {
+          id: 'tag-2',
+          name: 'Live Music',
+          category: 'Entertainment',
+          created_at: new Date('2024-01-01'),
+          updated_at: new Date('2024-01-01')
+        }
+      ];
+      db.execute.mockResolvedValueOnce([mockTags]);
+
+      const response = await request(app)
+        .get('/bars/bar-1/tags')
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.data).toHaveLength(2);
+      expect(response.body.data[0]).toMatchObject({
+        id: 'tag-1',
+        name: 'Sports Bar',
+        category: 'Atmosphere'
+      });
+      expect(response.body.meta).toMatchObject({
+        bar: {
+          id: 'bar-1',
+          name: 'Test Bar'
+        },
+        total: 2
+      });
+    });
+
+    test('should return empty array when bar has no tags', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1', name: 'Test Bar' }]]);
+      // Mock empty tags
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/bars/bar-1/tags')
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.data).toEqual([]);
+      expect(response.body.meta.total).toBe(0);
+      expect(response.body.meta.bar).toMatchObject({
+        id: 'bar-1',
+        name: 'Test Bar'
+      });
+    });
+
+    test('should return 404 for non-existent bar', async () => {
+      // Mock bar doesn't exist
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/bars/nonexistent-bar/tags')
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Bar not found');
+    });
+
+    test('should handle database errors gracefully', async () => {
+      db.execute.mockRejectedValueOnce(new Error('Database connection failed'));
+
+      const response = await request(app)
+        .get('/bars/bar-1/tags')
+        .expect(500);
+
+      expect(response.body).toHaveProperty('error', 'Failed to fetch bar tags');
+    });
+
+    test('should return proper content type', async () => {
+      // Mock bar exists
+      db.execute.mockResolvedValueOnce([[{ id: 'bar-1', name: 'Test Bar' }]]);
+      // Mock empty tags
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/bars/bar-1/tags')
+        .expect(200);
+
+      expect(response.headers['content-type']).toMatch(/application\/json/);
+    });
+  });
 });

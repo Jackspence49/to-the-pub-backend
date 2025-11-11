@@ -704,11 +704,342 @@ async function searchBarsByName(req, res) {
   }
 }
 
+/**
+ * POST /bars/:barId/tags/:tagId
+ * Adds a tag to a bar (protected route)
+ */
+async function addTagToBar(req, res) {
+  try {
+    const { barId, tagId } = req.params;
+    const userId = req.user.userId; // From JWT
+    
+    // Check if bar exists and is active
+    const checkBarSql = `SELECT id FROM bars WHERE id = ? AND is_active = 1`;
+    const [barRows] = await db.execute(checkBarSql, [barId]);
+    
+    if (!barRows || barRows.length === 0) {
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+    
+    // Check if tag exists
+    const checkTagSql = `SELECT id FROM tags WHERE id = ?`;
+    const [tagRows] = await db.execute(checkTagSql, [tagId]);
+    
+    if (!tagRows || tagRows.length === 0) {
+      return res.status(404).json({ error: 'Tag not found' });
+    }
+    
+    // Check if relationship already exists
+    const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tags WHERE bar_id = ? AND tag_id = ?`;
+    const [relationRows] = await db.execute(checkRelationSql, [barId, tagId]);
+    
+    if (relationRows && relationRows.length > 0) {
+      return res.status(409).json({ error: 'Tag is already associated with this bar' });
+    }
+    
+    // Add the tag to the bar
+    const insertSql = `INSERT INTO bar_tags (bar_id, tag_id) VALUES (?, ?)`;
+    await db.execute(insertSql, [barId, tagId]);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Tag added to bar successfully',
+      data: {
+        bar_id: barId,
+        tag_id: tagId
+      }
+    });
+  } catch (err) {
+    console.error('Error adding tag to bar:', err.message || err);
+    return res.status(500).json({ error: 'Failed to add tag to bar' });
+  }
+}
+
+/**
+ * DELETE /bars/:barId/tags/:tagId
+ * Removes a tag from a bar (protected route)
+ */
+async function removeTagFromBar(req, res) {
+  try {
+    const { barId, tagId } = req.params;
+    const userId = req.user.userId; // From JWT
+    
+    // Check if bar exists and is active
+    const checkBarSql = `SELECT id FROM bars WHERE id = ? AND is_active = 1`;
+    const [barRows] = await db.execute(checkBarSql, [barId]);
+    
+    if (!barRows || barRows.length === 0) {
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+    
+    // Check if tag exists
+    const checkTagSql = `SELECT id FROM tags WHERE id = ?`;
+    const [tagRows] = await db.execute(checkTagSql, [tagId]);
+    
+    if (!tagRows || tagRows.length === 0) {
+      return res.status(404).json({ error: 'Tag not found' });
+    }
+    
+    // Check if relationship exists
+    const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tags WHERE bar_id = ? AND tag_id = ?`;
+    const [relationRows] = await db.execute(checkRelationSql, [barId, tagId]);
+    
+    if (!relationRows || relationRows.length === 0) {
+      return res.status(404).json({ error: 'Tag is not associated with this bar' });
+    }
+    
+    // Remove the tag from the bar
+    const deleteSql = `DELETE FROM bar_tags WHERE bar_id = ? AND tag_id = ?`;
+    const [result] = await db.execute(deleteSql, [barId, tagId]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Tag association not found' });
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Tag removed from bar successfully',
+      data: {
+        bar_id: barId,
+        tag_id: tagId
+      }
+    });
+  } catch (err) {
+    console.error('Error removing tag from bar:', err.message || err);
+    return res.status(500).json({ error: 'Failed to remove tag from bar' });
+  }
+}
+
+/**
+ * Get all tags associated with a specific bar
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getBarTags = async (req, res) => {
+  const { barId } = req.params;
+
+  const conn = await db.getConnection();
+  try {
+    // Verify bar exists
+    const [barRows] = await conn.execute(
+      'SELECT id, name FROM bars WHERE id = ? AND is_active = 1',
+      [barId]
+    );
+
+    if (barRows.length === 0) {
+      conn.release();
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+
+    // Get all tags associated with this bar
+    const [tagRows] = await conn.execute(
+      `SELECT t.id, t.name, t.category, t.created_at
+       FROM tags t
+       INNER JOIN bar_tags bt ON t.id = bt.tag_id
+       WHERE bt.bar_id = ?
+       ORDER BY t.name ASC`,
+      [barId]
+    );
+
+    res.status(200).json({
+      success: true,
+      data: tagRows,
+      meta: {
+        bar: {
+          id: barRows[0].id,
+          name: barRows[0].name
+        },
+        total: tagRows.length
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching bar tags:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch bar tags' });
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * GET /bars/:barId/hours
+ * Returns all hours for a specific bar
+ * Public endpoint - no authentication required
+ */
+async function getBarHours(req, res) {
+  try {
+    const barId = req.params.barId;
+    
+    // First check if the bar exists and is active
+    const barCheckSql = `SELECT id, name FROM bars WHERE id = ? AND is_active = 1`;
+    const [barRows] = await db.execute(barCheckSql, [barId]);
+    
+    if (!barRows || barRows.length === 0) {
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+    
+    // Get all hours for the bar, ordered by day_of_week
+    const hoursSql = `
+      SELECT 
+        id,
+        day_of_week,
+        open_time,
+        close_time,
+        is_closed
+      FROM bar_hours 
+      WHERE bar_id = ? 
+      ORDER BY day_of_week
+    `;
+    
+    const [hoursRows] = await db.execute(hoursSql, [barId]);
+    
+    // Format the hours data
+    const hours = hoursRows.map(hour => ({
+      id: hour.id,
+      day_of_week: hour.day_of_week,
+      open_time: hour.open_time,
+      close_time: hour.close_time,
+      is_closed: Boolean(hour.is_closed)
+    }));
+    
+    return res.json({
+      success: true,
+      data: hours,
+      meta: {
+        bar: {
+          id: barRows[0].id,
+          name: barRows[0].name
+        },
+        total: hours.length
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching bar hours:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch bar hours' });
+  }
+}
+
+/**
+ * PUT /bars/:barId/hours
+ * Updates/replaces all hours for a specific bar
+ * Protected endpoint - requires authentication
+ * 
+ * Expected payload:
+ * {
+ *   hours: [
+ *     { day_of_week: 0, open_time: "12:00:00", close_time: "23:00:00", is_closed: false },
+ *     { day_of_week: 1, open_time: null, close_time: null, is_closed: true },
+ *     ...
+ *   ]
+ * }
+ */
+async function updateBarHours(req, res) {
+  const barId = req.params.barId;
+  const { hours } = req.body;
+  
+  // Validate payload
+  if (!Array.isArray(hours)) {
+    return res.status(400).json({ error: 'Hours must be provided as an array' });
+  }
+  
+  // Validate each hour entry
+  for (const hour of hours) {
+    if (typeof hour.day_of_week !== 'number' || hour.day_of_week < 0 || hour.day_of_week > 6) {
+      return res.status(400).json({ error: 'day_of_week must be a number between 0 and 6' });
+    }
+    
+    if (typeof hour.is_closed !== 'boolean') {
+      return res.status(400).json({ error: 'is_closed must be a boolean' });
+    }
+    
+    // If not closed, validate time formats
+    if (!hour.is_closed) {
+      if (!hour.open_time || !hour.close_time) {
+        return res.status(400).json({ 
+          error: 'open_time and close_time are required when is_closed is false' 
+        });
+      }
+      
+      // Basic time format validation (HH:MM:SS)
+      const timeRegex = /^([01]?\d|2[0-3]):[0-5]\d:[0-5]\d$/;
+      if (!timeRegex.test(hour.open_time) || !timeRegex.test(hour.close_time)) {
+        return res.status(400).json({ 
+          error: 'Time must be in HH:MM:SS format' 
+        });
+      }
+    }
+  }
+  
+  // Check for duplicate day_of_week values
+  const daySet = new Set(hours.map(h => h.day_of_week));
+  if (daySet.size !== hours.length) {
+    return res.status(400).json({ error: 'Duplicate day_of_week values are not allowed' });
+  }
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    // Check if bar exists and is active
+    const barCheckSql = `SELECT id FROM bars WHERE id = ? AND is_active = 1`;
+    const [barRows] = await conn.execute(barCheckSql, [barId]);
+    
+    if (!barRows || barRows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+    
+    // Delete all existing hours for the bar
+    const deleteSql = `DELETE FROM bar_hours WHERE bar_id = ?`;
+    await conn.execute(deleteSql, [barId]);
+    
+    // Insert new hours
+    const insertSql = `
+      INSERT INTO bar_hours (id, bar_id, day_of_week, open_time, close_time, is_closed) 
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+    
+    for (const hour of hours) {
+      const hourId = uuidv4();
+      const params = [
+        hourId,
+        barId,
+        hour.day_of_week,
+        hour.is_closed ? null : hour.open_time,
+        hour.is_closed ? null : hour.close_time,
+        hour.is_closed ? 1 : 0
+      ];
+      await conn.execute(insertSql, params);
+    }
+    
+    await conn.commit();
+    
+    return res.json({
+      success: true,
+      message: 'Bar hours updated successfully',
+      data: {
+        bar_id: barId,
+        hours_count: hours.length
+      }
+    });
+  } catch (err) {
+    await conn.rollback();
+    console.error('Error updating bar hours:', err.message || err);
+    return res.status(500).json({ error: 'Failed to update bar hours' });
+  } finally {
+    conn.release();
+  }
+}
+
 module.exports = {
   createBar,
   getAllBars,
   getBar,
   updateBar,
   deleteBar,
-  searchBarsByName
+  searchBarsByName,
+  addTagToBar,
+  removeTagFromBar,
+  getBarTags,
+  getBarHours,
+  updateBarHours
 };

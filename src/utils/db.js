@@ -13,4 +13,7 @@ const pool = mysql.createPool({
   charset: dbConfig.charset || 'utf8mb4'
 });
 
+// Add query method for convenience
+pool.query = pool.execute;
+
 module.exports = pool;
