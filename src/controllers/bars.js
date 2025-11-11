@@ -501,7 +501,8 @@ async function getBar(req, res) {
 
 /**
  * PUT /bars/:id
- * Updates an existing bar (protected route)
+ * Updates an existing bar's basic information only (protected route)
+ * Note: This endpoint only updates bar information, not hours or tags
  */
 async function updateBar(req, res) {
   try {
@@ -515,6 +516,13 @@ async function updateBar(req, res) {
     
     if (!checkRows || checkRows.length === 0) {
       return res.status(404).json({ error: 'Bar not found' });
+    }
+    
+    // Warn if hours or tag_ids are provided in the payload
+    if (payload.hours || payload.tag_ids) {
+      return res.status(400).json({ 
+        error: 'This endpoint only updates basic bar information. Hours and tags cannot be updated through this endpoint.' 
+      });
     }
     
     const conn = await db.getConnection();
@@ -548,7 +556,7 @@ async function updateBar(req, res) {
         }
       }
       
-      // Update basic bar information
+      // Update basic bar information only
       const updateSql = `
         UPDATE bars SET 
           name = COALESCE(?, name),
@@ -583,43 +591,11 @@ async function updateBar(req, res) {
         barId
       ]);
       
-      // Update hours if provided
-      if (Array.isArray(payload.hours)) {
-        // Delete existing hours
-        await conn.execute(`DELETE FROM bar_hours WHERE bar_id = ?`, [barId]);
-        
-        // Insert new hours
-        const insertHourSql = `INSERT INTO bar_hours (id, bar_id, day_of_week, open_time, close_time, is_closed) VALUES (?, ?, ?, ?, ?, ?)`;
-        for (const h of payload.hours) {
-          const hourId = uuidv4();
-          await conn.execute(insertHourSql, [
-            hourId,
-            barId,
-            h.day_of_week,
-            h.open_time || null,
-            h.close_time || null,
-            h.is_closed ? 1 : 0
-          ]);
-        }
-      }
-      
-      // Update tags if provided
-      if (Array.isArray(payload.tag_ids)) {
-        // Delete existing tag relationships
-        await conn.execute(`DELETE FROM bar_tags WHERE bar_id = ?`, [barId]);
-        
-        // Insert new tag relationships
-        const insertBarTagSql = `INSERT INTO bar_tags (bar_id, tag_id) VALUES (?, ?)`;
-        for (const tagId of payload.tag_ids) {
-          await conn.execute(insertBarTagSql, [barId, tagId]);
-        }
-      }
-      
       await conn.commit();
       
       return res.json({ 
         success: true, 
-        message: 'Bar updated successfully',
+        message: 'Bar information updated successfully',
         data: { id: barId }
       });
     } catch (err) {
@@ -663,8 +639,19 @@ async function deleteBar(req, res) {
 
 /**
  * GET /bars/search/name?q=searchterm
- * Lightweight search for bars by name (case-insensitive) - returns only essential data
- * Returns: bar UUID, name, and address information only
+ * Lightweight search for bars by name - returns only essential data for fast autocomplete/search
+ * 
+ * Features:
+ * - Case-insensitive search
+ * - Handles special characters (e.g., "O'Connell's" matches "oconnells")
+ * - No complex JOINs for optimal performance
+ * - Returns only essential fields: UUID, name, and complete address
+ * 
+ * Query Parameters:
+ * - q (required): Search term for bar name matching
+ * 
+ * Returns: Bar UUID, name, and address information only
+ * Response format: { success: true, data: [...], meta: { query, count } }
  */
 async function searchBarsByName(req, res) {
   try {

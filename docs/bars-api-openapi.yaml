@@ -140,8 +140,8 @@ paths:
           $ref: '#/components/responses/ServerError'
     
     put:
-      summary: Update an existing bar
-      description: Update bar information (requires authentication)
+      summary: Update an existing bar's basic information
+      description: Update bar information only. Hours and tags cannot be updated through this endpoint (requires authentication)
       tags:
         - Bars (Protected)
       security:
@@ -469,7 +469,7 @@ components:
 
     UpdateBarRequest:
       type: object
-      description: All fields are optional. Only provided fields will be updated.
+      description: All fields are optional. Only provided fields will be updated. Note - hours and tags cannot be updated through this endpoint.
       properties:
         name:
           type: string
@@ -517,17 +517,6 @@ components:
           type: string
           nullable: true
           description: Facebook page name
-        hours:
-          type: array
-          items:
-            $ref: '#/components/schemas/BarHours'
-          description: Operating hours (completely replaces existing hours)
-        tag_ids:
-          type: array
-          items:
-            type: string
-            format: uuid
-          description: Array of tag IDs (completely replaces existing tag relationships)
 
     BarsListResponse:
       type: object
@@ -634,7 +623,7 @@ components:
           example: true
         message:
           type: string
-          example: "Bar updated successfully"
+          example: "Bar information updated successfully"
         data:
           type: object
           properties:

@@ -278,35 +278,34 @@ PUT /api/bars/:id
 - `Content-Type: application/json`
 
 **Request Body:**
-All fields are optional. Only provided fields will be updated:
+All fields are optional. Only provided fields will be updated. **Note: This endpoint only updates basic bar information - hours and tags cannot be updated through this endpoint.**
 ```json
 {
   "name": "Updated Bar Name",
   "description": "Updated description",
   "address_street": "456 New Street",
+  "address_city": "Updated City",
+  "address_state": "CA",
+  "address_zip": "90210",
+  "latitude": 34.0522,
+  "longitude": -118.2437,
   "phone": "(555) 987-6543",
-  "hours": [
-    {
-      "day_of_week": 0,
-      "open_time": "11:00:00",
-      "close_time": "24:00:00",
-      "is_closed": false
-    }
-  ],
-  "tag_ids": ["new-tag-uuid-1", "new-tag-uuid-2"]
+  "website": "https://updatedbar.com",
+  "instagram": "@updatedbar",
+  "facebook": "UpdatedBar"
 }
 ```
 
 **Notes:**
-- If `hours` array is provided, it completely replaces existing hours
-- If `tag_ids` array is provided, it completely replaces existing tag relationships
+- This endpoint **does not** support updating `hours` or `tag_ids`
+- If `hours` or `tag_ids` are included in the request, a 400 error will be returned
 - Duplicate name/address validation applies if name and full address are updated
 
 **Response (200 OK):**
 ```json
 {
   "success": true,
-  "message": "Bar updated successfully",
+  "message": "Bar information updated successfully",
   "data": {
     "id": "bar-uuid"
   }
@@ -314,6 +313,7 @@ All fields are optional. Only provided fields will be updated:
 ```
 
 **Error Responses:**
+- `400` - Invalid request (includes hours or tag_ids)
 - `401` - No authentication token provided
 - `403` - Invalid authentication token
 - `404` - Bar not found

@@ -14,7 +14,7 @@
 | Method | Endpoint | Description | Auth Header |
 |--------|----------|-------------|-------------|
 | POST | `/bars` | Create bar | `Authorization: Bearer <token>` |
-| PUT | `/bars/:id` | Update bar | `Authorization: Bearer <token>` |
+| PUT | `/bars/:id` | Update bar info (excludes hours/tags) | `Authorization: Bearer <token>` |
 | DELETE | `/bars/:id` | Delete bar (soft) | `Authorization: Bearer <token>` |
 
 ## Include Options
@@ -91,6 +91,7 @@ Content-Type: application/json
   "name": "New Name"
 }
 ```
+**Note:** Only basic bar information can be updated (excludes hours and tags). Including `hours` or `tag_ids` in the request will return a 400 error.
 
 ### Soft delete bar
 ```bash

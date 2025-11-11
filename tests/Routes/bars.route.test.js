@@ -543,7 +543,7 @@ describe('Bars Routes Integration Tests', () => {
         .expect(200);
 
       expect(response.body).toHaveProperty('success', true);
-      expect(response.body).toHaveProperty('message', 'Bar updated successfully');
+      expect(response.body).toHaveProperty('message', 'Bar information updated successfully');
       expect(response.body.data).toHaveProperty('id', 'bar-1');
     });
 

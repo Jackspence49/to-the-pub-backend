@@ -459,7 +459,7 @@ describe('Bars Controller Tests', () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.message).toBe('Bar updated successfully');
+      expect(response.body.message).toBe('Bar information updated successfully');
       expect(response.body.data.id).toBe('bar-1');
       expect(mockConnection.beginTransaction).toHaveBeenCalled();
       expect(mockConnection.commit).toHaveBeenCalled();
@@ -486,7 +486,7 @@ describe('Bars Controller Tests', () => {
       expect(response.body.error).toBe('Bar not found');
     });
 
-    test('should update bar hours when provided', async () => {
+    test('should reject requests that include hours or tag_ids', async () => {
       const updateWithHours = {
         ...updateData,
         hours: [
@@ -499,16 +499,28 @@ describe('Bars Controller Tests', () => {
         ]
       };
 
-      db.execute.mockResolvedValue([[{ id: 'bar-1' }]]);
-      mockConnection.execute.mockResolvedValue([{ affectedRows: 1 }]);
-
       const response = await request(app)
         .put('/bars/bar-1')
         .set('Authorization', `Bearer ${validToken}`)
         .send(updateWithHours)
-        .expect(200);
+        .expect(400);
 
-      expect(response.body.success).toBe(true);
+      expect(response.body.error).toBe('This endpoint only updates basic bar information. Hours and tags cannot be updated through this endpoint.');
+    });
+
+    test('should reject requests that include tag_ids', async () => {
+      const updateWithTags = {
+        ...updateData,
+        tag_ids: ['tag-1', 'tag-2']
+      };
+
+      const response = await request(app)
+        .put('/bars/bar-1')
+        .set('Authorization', `Bearer ${validToken}`)
+        .send(updateWithTags)
+        .expect(400);
+
+      expect(response.body.error).toBe('This endpoint only updates basic bar information. Hours and tags cannot be updated through this endpoint.');
     });
 
     test('should handle database errors during update', async () => {
