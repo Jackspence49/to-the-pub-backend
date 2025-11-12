@@ -221,6 +221,353 @@ describe('Bars Controller Tests', () => {
       expect(response.body.data[0].distance).toBe(4.8);
       expect(response.body.data[0].distanceUnit).toBe('km');
     });
+
+    test('should return bars sorted by distance when lat and lon parameters are provided', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Far Bar',
+          address_street: '123 Test St',
+          address_city: 'Test City',
+          address_state: 'TX',
+          address_zip: '12345',
+          latitude: 40.7580,
+          longitude: -73.9855,
+          distance_km: 5.67
+        },
+        {
+          id: 'bar-2',
+          name: 'Near Bar',
+          address_street: '456 Test Ave',
+          address_city: 'Test City',
+          address_state: 'TX',
+          address_zip: '12346',
+          latitude: 40.7589,
+          longitude: -73.9851,
+          distance_km: 1.23
+        }
+      ];
+
+      db.query.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveLength(2);
+      expect(response.body.data[0].name).toBe('Far Bar');
+      expect(response.body.data[1].name).toBe('Near Bar');
+      expect(response.body.meta.location).toEqual({
+        lat: 40.7589,
+        lon: -73.9851,
+        sorted_by_distance: true,
+        unit: 'km'
+      });
+    });
+
+    test('should filter bars by radius when radius parameter is provided', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Nearby Bar',
+          address_street: '123 Test St',
+          address_city: 'Test City',
+          address_state: 'TX',
+          address_zip: '12345',
+          latitude: 40.7580,
+          longitude: -73.9855,
+          distance_km: 2.5
+        }
+      ];
+
+      db.query.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&radius=5')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.data[0].name).toBe('Nearby Bar');
+      expect(response.body.meta.filters.radius).toBe(5);
+      expect(response.body.meta.filters.unit).toBe('km');
+    });
+
+    test('should support miles unit for distance calculation', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Bar in Miles',
+          address_street: '123 Test St',
+          address_city: 'Test City',
+          address_state: 'TX',
+          address_zip: '12345',
+          latitude: 40.7580,
+          longitude: -73.9855,
+          distance_miles: 1.55
+        }
+      ];
+
+      db.query.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&unit=miles')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.data[0].name).toBe('Bar in Miles');
+      expect(response.body.meta.location.unit).toBe('miles');
+      expect(response.body.meta.filters.unit).toBe('miles');
+    });
+
+    test('should support radius with miles unit', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Bar within 3 miles',
+          address_street: '123 Test St',
+          address_city: 'Test City',
+          address_state: 'TX',
+          address_zip: '12345',
+          latitude: 40.7580,
+          longitude: -73.9855,
+          distance_miles: 2.1
+        }
+      ];
+
+      db.query.mockResolvedValue([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&radius=3&unit=miles')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.data[0].name).toBe('Bar within 3 miles');
+      expect(response.body.meta.filters.radius).toBe(3);
+      expect(response.body.meta.filters.unit).toBe('miles');
+    });
+
+    test('should validate lat/lon parameters', async () => {
+      const response1 = await request(app)
+        .get('/bars?lat=invalid&lon=-73.9851')
+        .expect(400);
+      
+      expect(response1.body.error).toContain('Invalid latitude or longitude');
+
+      const response2 = await request(app)
+        .get('/bars?lat=91&lon=-73.9851')
+        .expect(400);
+      
+      expect(response2.body.error).toContain('Invalid latitude or longitude');
+
+      const response3 = await request(app)
+        .get('/bars?lat=40.7589&lon=181')
+        .expect(400);
+      
+      expect(response3.body.error).toContain('Invalid latitude or longitude');
+    });
+
+    test('should validate radius parameter', async () => {
+      const response1 = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&radius=-5')
+        .expect(400);
+      
+      expect(response1.body.error).toContain('Radius must be a positive number');
+
+      const response2 = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&radius=invalid')
+        .expect(400);
+      
+      expect(response2.body.error).toContain('Radius must be a positive number');
+
+      const response3 = await request(app)
+        .get('/bars?radius=5')
+        .expect(400);
+      
+      expect(response3.body.error).toContain('Radius and unit parameters require both lat and lon');
+    });
+
+    test('should validate unit parameter', async () => {
+      const response1 = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&unit=invalid')
+        .expect(400);
+      
+      expect(response1.body.error).toContain('Unit must be either "km" or "miles"');
+
+      const response2 = await request(app)
+        .get('/bars?unit=miles')
+        .expect(400);
+      
+      expect(response2.body.error).toContain('Radius and unit parameters require both lat and lon');
+    });
+  });
+
+  describe('GET /bars - Pagination Features', () => {
+    test('should support pagination with page and limit parameters', async () => {
+      const mockBars = [
+        { id: 'bar-1', name: 'Bar 1', address_street: '123 Test St' },
+        { id: 'bar-2', name: 'Bar 2', address_street: '456 Test Ave' }
+      ];
+      
+      const mockCount = [{ total: 25 }];
+
+      db.query
+        .mockResolvedValueOnce([mockCount])  // Count query
+        .mockResolvedValueOnce([mockBars]);  // Data query
+
+      const response = await request(app)
+        .get('/bars?page=2&limit=10')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data).toHaveLength(2);
+      expect(response.body.meta.page).toBe(2);
+      expect(response.body.meta.limit).toBe(10);
+      expect(response.body.meta.total).toBe(25);
+      expect(response.body.meta.totalPages).toBe(3);
+      expect(response.body.meta.hasNextPage).toBe(true);
+      expect(response.body.meta.hasPrevPage).toBe(true);
+    });
+
+    test('should use default pagination values when not provided', async () => {
+      const mockBars = [{ id: 'bar-1', name: 'Bar 1' }];
+      const mockCount = [{ total: 1 }];
+
+      db.query
+        .mockResolvedValueOnce([mockCount])
+        .mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars')
+        .expect(200);
+
+      expect(response.body.meta.page).toBe(1);
+      expect(response.body.meta.limit).toBe(50);
+      expect(response.body.meta.totalPages).toBe(1);
+      expect(response.body.meta.hasNextPage).toBe(false);
+      expect(response.body.meta.hasPrevPage).toBe(false);
+    });
+
+    test('should validate page parameter', async () => {
+      const response1 = await request(app)
+        .get('/bars?page=0')
+        .expect(400);
+      
+      expect(response1.body.error).toContain('Page must be a positive integer starting from 1');
+
+      const response2 = await request(app)
+        .get('/bars?page=invalid')
+        .expect(400);
+      
+      expect(response2.body.error).toContain('Page must be a positive integer starting from 1');
+    });
+
+    test('should validate limit parameter', async () => {
+      const response1 = await request(app)
+        .get('/bars?limit=0')
+        .expect(400);
+      
+      expect(response1.body.error).toContain('Limit must be between 1 and 100');
+
+      const response2 = await request(app)
+        .get('/bars?limit=101')
+        .expect(400);
+      
+      expect(response2.body.error).toContain('Limit must be between 1 and 100');
+
+      const response3 = await request(app)
+        .get('/bars?limit=invalid')
+        .expect(400);
+      
+      expect(response3.body.error).toContain('Limit must be between 1 and 100');
+    });
+
+    test('should work with pagination and distance sorting combined', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Nearby Bar',
+          latitude: 40.7580,
+          longitude: -73.9855,
+          distance_km: 1.5
+        }
+      ];
+      
+      const mockCount = [{ total: 15 }];
+
+      db.query
+        .mockResolvedValueOnce([mockCount])
+        .mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&page=1&limit=5')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.meta.page).toBe(1);
+      expect(response.body.meta.limit).toBe(5);
+      expect(response.body.meta.total).toBe(15);
+      expect(response.body.meta.totalPages).toBe(3);
+      expect(response.body.meta.location.sorted_by_distance).toBe(true);
+    });
+
+    test('should work with pagination and radius filtering combined', async () => {
+      const mockBars = [
+        {
+          id: 'bar-1',
+          name: 'Filtered Bar',
+          latitude: 40.7580,
+          longitude: -73.9855,
+          distance_miles: 2.1
+        }
+      ];
+      
+      const mockCount = [{ total: 8 }];
+
+      db.query
+        .mockResolvedValueOnce([mockCount])
+        .mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?lat=40.7589&lon=-73.9851&radius=3&unit=miles&page=2&limit=3')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.meta.page).toBe(2);
+      expect(response.body.meta.limit).toBe(3);
+      expect(response.body.meta.total).toBe(8);
+      expect(response.body.meta.totalPages).toBe(3);
+      expect(response.body.meta.filters.radius).toBe(3);
+      expect(response.body.meta.filters.unit).toBe('miles');
+    });
+
+    test('should handle last page correctly', async () => {
+      const mockBars = [
+        { id: 'bar-1', name: 'Last Bar' }
+      ];
+      
+      const mockCount = [{ total: 21 }];
+
+      db.query
+        .mockResolvedValueOnce([mockCount])
+        .mockResolvedValueOnce([mockBars]);
+
+      const response = await request(app)
+        .get('/bars?page=3&limit=10')
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.meta.page).toBe(3);
+      expect(response.body.meta.limit).toBe(10);
+      expect(response.body.meta.total).toBe(21);
+      expect(response.body.meta.totalPages).toBe(3);
+      expect(response.body.meta.hasNextPage).toBe(false);
+      expect(response.body.meta.hasPrevPage).toBe(true);
+      expect(response.body.meta.count).toBe(1); // Only 1 item on last page
+    });
   });
 
   describe('GET /bars/:id - Get Single Bar', () => {
