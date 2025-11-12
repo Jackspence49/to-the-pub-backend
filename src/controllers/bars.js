@@ -228,7 +228,7 @@ async function getAllBars(req, res) {
     
     if (has_events === 'true') {
       joinClauses.push('INNER JOIN events e_filter ON b.id = e_filter.bar_id');
-      whereClauses.push('e_filter.is_active = 1 AND e_filter.event_date >= CURDATE()');
+      whereClauses.push('e_filter.is_active = 1 AND e_filter.date >= CURDATE()');
     }
     
     // Add joins and select clauses based on include parameters
@@ -250,9 +250,9 @@ async function getAllBars(req, res) {
     if (includeOptions.includes('events')) {
       joinClauses.push(`LEFT JOIN events e ON b.id = e.bar_id 
         AND e.is_active = 1 
-        AND e.event_date >= CURDATE()`);
+        AND e.date >= CURDATE()`);
       selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(e.id, ':', e.name, ':', e.event_date, ':', COALESCE(e.start_time, ''), ':', COALESCE(e.event_type, ''))
+        DISTINCT CONCAT(e.id, ':', e.title, ':', e.date, ':', COALESCE(e.start_time, ''), ':', COALESCE(e.category, ''))
       ) as upcoming_events`);
     }
     
@@ -335,13 +335,13 @@ async function getAllBars(req, res) {
       
       if (includeOptions.includes('events') && bar.upcoming_events) {
         result.upcoming_events = bar.upcoming_events.split(',').map(e => {
-          const [id, name, event_date, start_time, event_type] = e.split(':');
+          const [id, title, date, start_time, category] = e.split(':');
           return {
             id,
-            name,
-            event_date,
+            title,
+            date,
             start_time: start_time || null,
-            event_type: event_type || null
+            category: category || null
           };
         });
       } else if (includeOptions.includes('events')) {
@@ -417,9 +417,9 @@ async function getBar(req, res) {
     if (includeOptions.includes('events')) {
       joinClauses.push(`LEFT JOIN events e ON b.id = e.bar_id 
         AND e.is_active = 1 
-        AND e.event_date >= CURDATE()`);
+        AND e.date >= CURDATE()`);
       selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(e.id, ':', e.name, ':', e.event_date, ':', COALESCE(e.start_time, ''), ':', COALESCE(e.event_type, ''))
+        DISTINCT CONCAT(e.id, ':', e.title, ':', e.date, ':', COALESCE(e.start_time, ''), ':', COALESCE(e.category, ''))
       ) as upcoming_events`);
     }
     
@@ -473,13 +473,13 @@ async function getBar(req, res) {
     
     if (includeOptions.includes('events') && bar.upcoming_events) {
       result.upcoming_events = bar.upcoming_events.split(',').map(e => {
-        const [id, name, event_date, start_time, event_type] = e.split(':');
+        const [id, title, date, start_time, category] = e.split(':');
         return {
           id,
-          name,
-          event_date,
+          title,
+          date,
           start_time: start_time || null,
-          event_type: event_type || null
+          category: category || null
         };
       });
     } else if (includeOptions.includes('events')) {

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const barsController = require('../controllers/bars');
+const eventsController = require('../controllers/events');
 const { authenticateToken, optionalAuth } = require('../utils/auth');
 
 // Public routes (read operations)
@@ -12,6 +13,8 @@ router.get('/search/name', optionalAuth, barsController.searchBarsByName);
 router.get('/:barId/tags', barsController.getBarTags);
 // GET /bars/:barId/hours -> get all hours for a specific bar
 router.get('/:barId/hours', barsController.getBarHours);
+// GET /bars/:barId/events -> get all events for a specific bar
+router.get('/:barId/events', eventsController.getBarEvents);
 // GET /bars/:id -> get single bar with optional includes (optional auth for future features)
 router.get('/:id', optionalAuth, barsController.getBar);
 
