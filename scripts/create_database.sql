@@ -30,44 +30,65 @@ CREATE TABLE bar_hours (
     open_time TIME,
     close_time TIME,
     is_closed BOOLEAN DEFAULT false, -- for days they're closed
+    crosses_midnight BOOLEAN DEFAULT FALSE
+
     UNIQUE KEY unique_bar_day (bar_id, day_of_week),
     FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE
 );
 
 -- Bar tags/categories table
-CREATE TABLE tags (
+CREATE TABLE bar_tags (
     id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
     name VARCHAR(50) NOT NULL UNIQUE,
-    category VARCHAR(50), -- 'type', 'atmosphere', 'amenity'
+    category VARCHAR(50), 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Junction table for many-to-many relationship between bars and tags
-CREATE TABLE bar_tags (
+CREATE TABLE bar_tag_assignments (
     bar_id CHAR(36) NOT NULL,
     tag_id CHAR(36) NOT NULL,
     PRIMARY KEY (bar_id, tag_id),
     FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE,
-    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    FOREIGN KEY (tag_id) REFERENCES bar_tags(id) ON DELETE CASCADE
+);
+
+-- Bar tags/categories table
+CREATE TABLE event_tags (
+    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    name VARCHAR(50) NOT NULL UNIQUE, 
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Junction table for many-to-many relationship between events and tags
+CREATE TABLE event_tag_assignments (
+    event_id CHAR(36) NOT NULL,
+    tag_id CHAR(36) NOT NULL,
+    PRIMARY KEY (event_id, tag_id),
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES event_tags(id) ON DELETE CASCADE
 );
 
 -- Events table
 CREATE TABLE events (
     id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
     bar_id CHAR(36) NOT NULL,
-    name VARCHAR(255) NOT NULL,
+    title VARCHAR(255) NOT NULL,
     description TEXT,
-    event_date DATE NOT NULL,
-    start_time TIME,
-    end_time TIME,
-    cover_charge DECIMAL(6, 2),
-    is_recurring BOOLEAN DEFAULT false,
-    recurrence_pattern VARCHAR(50), -- 'weekly', 'biweekly', 'monthly', etc.
-    event_type VARCHAR(100), -- 'live_music', 'trivia', 'karaoke', 'dj', etc.
-    is_active BOOLEAN DEFAULT true,
+    date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    image_url VARCHAR(500),
+    external_link VARCHAR(500),
+    is_active BOOLEAN DEFAULT true, -- Adding this for soft deletes
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE
+    
+    FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE,
+    INDEX idx_events_bar_date (bar_id, date),
+    INDEX idx_events_date (date),
+    INDEX idx_events_active (is_active),
+    INDEX idx_events_bar_active (bar_id, is_active)
 );
 
 
@@ -90,17 +111,20 @@ CREATE TABLE web_users (
     full_name VARCHAR(255),
     role ENUM('super_admin', 'venue_owner', 'staff', 'manager', 'user') NOT NULL DEFAULT 'user',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    reset_token VARCHAR(255) DEFAULT NULL,
+    reset_token_expires TIMESTAMP NULL DEFAULT NULL
 );
 
 CREATE INDEX idx_web_users_role ON web_users(role);
+CREATE INDEX idx_web_users_reset_token ON web_users(reset_token);
 
 -- Bar tags indexes
-CREATE INDEX idx_bar_tags_bar ON bar_tags(bar_id);
-CREATE INDEX idx_bar_tags_tag ON bar_tags(tag_id);
+CREATE INDEX idx_bar_tag_assignments_bar ON bar_tag_assignments(bar_id);
+CREATE INDEX idx_bar_tag_assignments_tag ON bar_tag_assignments(tag_id);
 
 -- Sample tags to get started
-INSERT INTO tags (name, category) VALUES
+INSERT INTO bar_tags (name, category) VALUES
     ('Sports Bar', 'type'),
     ('Dive Bar', 'type'),
     ('Cocktail Lounge', 'type'),
@@ -120,3 +144,21 @@ INSERT INTO tags (name, category) VALUES
     ('Darts', 'amenity'),
     ('Craft Beer', 'type'),
     ('Rooftop', 'amenity');
+
+-- Sample event category tags
+INSERT INTO event_tags (name) VALUES
+    ('Live Music'),
+    ('Trivia'),
+    ('Happy Hour'),
+    ('Sports'),
+    ('Comedy'),
+    ('Karaoke'),
+    ('DJ Night'),
+    ('Open Mic'),
+    ('Themed Party'),
+    ('Game Night'),
+    ('Dancing'),
+    ('Food Special'),
+    ('Drink Special'),
+    ('Private Event'),
+    ('Networking');

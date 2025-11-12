@@ -68,7 +68,10 @@ describe('Bars Controller Tests', () => {
         }
       ];
 
-      db.query.mockResolvedValue([mockBars]);
+      // Mock both count query and main query for pagination
+      db.query
+        .mockResolvedValueOnce([[{ total: 1 }], []]) // Count query
+        .mockResolvedValueOnce([mockBars, []]); // Main query
 
       const response = await request(app)
         .get('/bars?include=hours,tags')
@@ -78,11 +81,17 @@ describe('Bars Controller Tests', () => {
       expect(response.body.data).toHaveLength(1);
       expect(response.body.data[0].name).toBe('Test Bar 1');
       expect(response.body.data[0].hours).toHaveLength(2);
-      expect(response.body.data[0].tags).toEqual(['Sports Bar', 'Craft Beer']);
+      expect(response.body.data[0].tags).toEqual([
+        { id: 'Sports Bar', name: undefined, category: null },
+        { id: 'Craft Beer', name: undefined, category: null }
+      ]);
     });
 
     test('should return empty array when no bars exist', async () => {
-      db.query.mockResolvedValue([[]]);
+      // Mock both count query and main query for pagination
+      db.query
+        .mockResolvedValueOnce([[{ total: 0 }], []]) // Count query
+        .mockResolvedValueOnce([[], []]); // Main query
 
       const response = await request(app)
         .get('/bars')
@@ -658,7 +667,7 @@ describe('Bars Controller Tests', () => {
     };
 
     test('should successfully create a bar with authentication', async () => {
-      mockConnection.execute.mockResolvedValue([{ insertId: 1 }]);
+      mockConnection.execute.mockResolvedValue([{ insertId: 1 }, []]);
 
       const response = await request(app)
         .post('/bars')
@@ -730,7 +739,7 @@ describe('Bars Controller Tests', () => {
     test('should prevent creating duplicate bars with same name and address', async () => {
       // Mock the duplicate check to return an existing bar
       const duplicateCheckResult = [{ id: 'existing-bar-id' }];
-      mockConnection.execute.mockResolvedValueOnce([duplicateCheckResult]);
+      mockConnection.execute.mockResolvedValueOnce([duplicateCheckResult, []]);
 
       const response = await request(app)
         .post('/bars')

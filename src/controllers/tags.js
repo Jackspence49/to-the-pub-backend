@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid');
  */
 async function getAllTags(req, res) {
   try {
-    const [rows] = await db.query('SELECT id, name, category, created_at FROM tags ORDER BY name');
+    const [rows] = await db.query('SELECT id, name, category, created_at FROM bar_tags ORDER BY name');
     return res.json({ data: rows });
   } catch (err) {
     console.error('Error fetching tags:', err.message || err);
@@ -30,7 +30,7 @@ async function createTag(req, res) {
     }
     
     const tagId = uuidv4();
-    const insertSql = `INSERT INTO tags (id, name, category) VALUES (?, ?, ?)`;
+    const insertSql = `INSERT INTO bar_tags (id, name, category) VALUES (?, ?, ?)`;
     
     const [result] = await db.execute(insertSql, [
       tagId,
@@ -69,7 +69,7 @@ async function updateTag(req, res) {
       return res.status(400).json({ error: 'Tag name is required' });
     }
     
-    const updateSql = `UPDATE tags SET name = ?, category = ? WHERE id = ?`;
+    const updateSql = `UPDATE bar_tags SET name = ?, category = ? WHERE id = ?`;
     const [result] = await db.execute(updateSql, [
       name.trim(),
       category ? category.trim() : null,
@@ -108,7 +108,7 @@ async function deleteTag(req, res) {
     const userId = req.user.userId; // From JWT
     
     // Check if tag is used by any bars
-    const checkUsageSql = `SELECT COUNT(*) as count FROM bar_tags WHERE tag_id = ?`;
+    const checkUsageSql = `SELECT COUNT(*) as count FROM bar_tag_assignments WHERE tag_id = ?`;
     const [usageRows] = await db.execute(checkUsageSql, [tagId]);
     
     if (usageRows[0].count > 0) {
@@ -117,7 +117,7 @@ async function deleteTag(req, res) {
       });
     }
     
-    const deleteSql = `DELETE FROM tags WHERE id = ?`;
+    const deleteSql = `DELETE FROM bar_tags WHERE id = ?`;
     const [result] = await db.execute(deleteSql, [tagId]);
     
     if (result.affectedRows === 0) {

@@ -113,9 +113,9 @@ async function createBar(req, res) {
       }
     }
 
-    // Insert bar_tags relationships if provided (Just submitting tag ids, more efficient))
+    // Insert bar_tag_assignments relationships if provided (Just submitting tag ids, more efficient))
     if (Array.isArray(payload.tag_ids)) {
-      const insertBarTagSql = `INSERT INTO bar_tags (bar_id, tag_id) VALUES (?, ?)`;
+      const insertBarTagSql = `INSERT INTO bar_tag_assignments (bar_id, tag_id) VALUES (?, ?)`;
       for (const tagId of payload.tag_ids) {
         await conn.execute(insertBarTagSql, [barId, tagId]);
       }
@@ -245,7 +245,7 @@ async function getAllBars(req, res) {
     if (tag) {
       const tagIds = [...new Set(tag.split(',').map(id => id.trim()).filter(id => id.length > 0))]; // Remove duplicates
       if (tagIds.length > 0) {
-        joinClauses.push('INNER JOIN bar_tags bt_filter ON b.id = bt_filter.bar_id');
+        joinClauses.push('INNER JOIN bar_tag_assignments bt_filter ON b.id = bt_filter.bar_id');
         const placeholders = tagIds.map(() => '?').join(',');
         whereClauses.push(`bt_filter.tag_id IN (${placeholders})`);
         params.push(...tagIds);
@@ -286,8 +286,8 @@ async function getAllBars(req, res) {
     }
     
     if (includeOptions.includes('tags')) {
-      joinClauses.push('LEFT JOIN bar_tags bt ON b.id = bt.bar_id');
-      joinClauses.push('LEFT JOIN tags t ON bt.tag_id = t.id');
+      joinClauses.push('LEFT JOIN bar_tag_assignments bt ON b.id = bt.bar_id');
+      joinClauses.push('LEFT JOIN bar_tags t ON bt.tag_id = t.id');
       selectClauses.push(`GROUP_CONCAT(
         DISTINCT CONCAT(t.id, ':', t.name, ':', COALESCE(t.category, ''))
       ) as tags`);
@@ -441,8 +441,8 @@ async function getBar(req, res) {
     }
     
     if (includeOptions.includes('tags')) {
-      joinClauses.push('LEFT JOIN bar_tags bt ON b.id = bt.bar_id');
-      joinClauses.push('LEFT JOIN tags t ON bt.tag_id = t.id');
+      joinClauses.push('LEFT JOIN bar_tag_assignments bt ON b.id = bt.bar_id');
+      joinClauses.push('LEFT JOIN bar_tags t ON bt.tag_id = t.id');
       selectClauses.push(`GROUP_CONCAT(
         DISTINCT CONCAT(t.id, ':', t.name, ':', COALESCE(t.category, ''))
       ) as tags`);
@@ -757,7 +757,7 @@ async function addTagToBar(req, res) {
     }
     
     // Check if tag exists
-    const checkTagSql = `SELECT id FROM tags WHERE id = ?`;
+    const checkTagSql = `SELECT id FROM bar_tags WHERE id = ?`;
     const [tagRows] = await db.execute(checkTagSql, [tagId]);
     
     if (!tagRows || tagRows.length === 0) {
@@ -765,7 +765,7 @@ async function addTagToBar(req, res) {
     }
     
     // Check if relationship already exists
-    const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tags WHERE bar_id = ? AND tag_id = ?`;
+    const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tag_assignments WHERE bar_id = ? AND tag_id = ?`;
     const [relationRows] = await db.execute(checkRelationSql, [barId, tagId]);
     
     if (relationRows && relationRows.length > 0) {
@@ -773,7 +773,7 @@ async function addTagToBar(req, res) {
     }
     
     // Add the tag to the bar
-    const insertSql = `INSERT INTO bar_tags (bar_id, tag_id) VALUES (?, ?)`;
+    const insertSql = `INSERT INTO bar_tag_assignments (bar_id, tag_id) VALUES (?, ?)`;
     await db.execute(insertSql, [barId, tagId]);
     
     return res.status(201).json({
@@ -808,7 +808,7 @@ async function removeTagFromBar(req, res) {
     }
     
     // Check if tag exists
-    const checkTagSql = `SELECT id FROM tags WHERE id = ?`;
+    const checkTagSql = `SELECT id FROM bar_tags WHERE id = ?`;
     const [tagRows] = await db.execute(checkTagSql, [tagId]);
     
     if (!tagRows || tagRows.length === 0) {
@@ -816,7 +816,7 @@ async function removeTagFromBar(req, res) {
     }
     
     // Check if relationship exists
-    const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tags WHERE bar_id = ? AND tag_id = ?`;
+    const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tag_assignments WHERE bar_id = ? AND tag_id = ?`;
     const [relationRows] = await db.execute(checkRelationSql, [barId, tagId]);
     
     if (!relationRows || relationRows.length === 0) {
@@ -824,7 +824,7 @@ async function removeTagFromBar(req, res) {
     }
     
     // Remove the tag from the bar
-    const deleteSql = `DELETE FROM bar_tags WHERE bar_id = ? AND tag_id = ?`;
+    const deleteSql = `DELETE FROM bar_tag_assignments WHERE bar_id = ? AND tag_id = ?`;
     const [result] = await db.execute(deleteSql, [barId, tagId]);
     
     if (result.affectedRows === 0) {
@@ -869,8 +869,8 @@ const getBarTags = async (req, res) => {
     // Get all tags associated with this bar
     const [tagRows] = await conn.execute(
       `SELECT t.id, t.name, t.category, t.created_at
-       FROM tags t
-       INNER JOIN bar_tags bt ON t.id = bt.tag_id
+       FROM bar_tags t
+       INNER JOIN bar_tag_assignments bt ON t.id = bt.tag_id
        WHERE bt.bar_id = ?
        ORDER BY t.name ASC`,
       [barId]

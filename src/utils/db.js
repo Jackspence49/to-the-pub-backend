@@ -13,7 +13,9 @@ const pool = mysql.createPool({
   charset: dbConfig.charset || 'utf8mb4'
 });
 
-// Add query method for convenience
-pool.query = pool.execute;
+// Both execute and query are already available on the pool
+// execute() - for prepared statements (recommended for user input)
+// query() - for direct SQL queries
+// Both return [rows, fields] when using mysql2/promise
 
 module.exports = pool;
