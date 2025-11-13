@@ -17,10 +17,10 @@ const {
  *   start_time: 'HH:MM:SS',
  *   end_time: 'HH:MM:SS',
  *   image_url: 'string', // optional
- *   tag_id: 'uuid', // event tag UUID from event_tags table
+ *   event_tag_id: 'uuid', // event tag UUID from event_tags table
  *   external_link: 'string', // optional
  *   recurrence_pattern: 'none|daily|weekly|monthly', // default: 'none'
- *   recurrence_days: [0,1,2,3,4,5,6], // array of day numbers, required for weekly/monthly
+ *   recurrence_days: [0,1,2,3,4,5,6], // array of day numbers, required for weekly only
  *   recurrence_start_date: 'YYYY-MM-DD', // required for recurring events, or single event date
  *   recurrence_end_date: 'YYYY-MM-DD' // required for recurring events
  * }
@@ -30,9 +30,9 @@ async function createEvent(req, res) {
 
   // Basic validation
   if (!payload || !payload.bar_id || !payload.title || 
-      !payload.start_time || !payload.end_time || !payload.tag_id) {
+      !payload.start_time || !payload.end_time || !payload.event_tag_id) {
     return res.status(400).json({ 
-      error: 'Missing required fields: bar_id, title, start_time, end_time, tag_id' 
+      error: 'Missing required fields: bar_id, title, start_time, end_time, event_tag_id' 
     });
   }
 
@@ -48,11 +48,11 @@ async function createEvent(req, res) {
 
   // Validate tag exists
   const tagCheckSql = `SELECT id, name FROM event_tags WHERE id = ?`;
-  const [tagRows] = await db.execute(tagCheckSql, [payload.tag_id]);
+  const [tagRows] = await db.execute(tagCheckSql, [payload.event_tag_id]);
   
   if (!tagRows || tagRows.length === 0) {
     return res.status(400).json({ 
-      error: 'Invalid tag_id. Event tag not found.' 
+      error: 'Invalid event_tag_id. Event tag not found.' 
     });
   }
 
@@ -102,7 +102,7 @@ async function createEvent(req, res) {
   }
 
   // Validate that start date is not in the past
-  const startDate = new Date(payload.recurrence_start_date);
+  const startDate = new Date(payload.recurrence_start_date + 'T00:00:00');
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (startDate < today) {
@@ -129,9 +129,9 @@ async function createEvent(req, res) {
     const insertEventSql = `
       INSERT INTO events (
         id, bar_id, title, description, start_time, end_time, crosses_midnight,
-        image_url, external_link, recurrence_pattern, 
+        image_url, event_tag_id, external_link, recurrence_pattern, 
         recurrence_days, recurrence_start_date, recurrence_end_date, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
     const eventParams = [
@@ -143,6 +143,7 @@ async function createEvent(req, res) {
       payload.end_time,
       crossesMidnight ? 1 : 0,
       payload.image_url || null,
+      payload.event_tag_id,
       payload.external_link || null,
       recurrencePattern,
       recurrencePattern !== 'none' ? JSON.stringify(payload.recurrence_days || []) : null,
@@ -176,10 +177,6 @@ async function createEvent(req, res) {
         await conn.execute(insertInstanceSql, [instanceId, instance.event_id, instance.date, crossesMidnight ? 1 : 0]);
       }
     }
-
-    // Create event-tag assignment
-    const tagAssignmentSql = `INSERT INTO event_tag_assignments (event_id, tag_id) VALUES (?, ?)`;
-    await conn.execute(tagAssignmentSql, [eventId, payload.tag_id]);
 
     await conn.commit();
 
@@ -240,13 +237,10 @@ async function getEventInstances(req, res) {
     let whereClauses = [];
     let params = [];
 
-    // Add tag filtering with EXISTS subquery if tag_ids provided
+    // Add tag filtering if tag_ids provided
     if (tagIdArray.length > 0) {
       const tagPlaceholders = tagIdArray.map(() => '?').join(',');
-      whereClauses.push(`EXISTS (
-        SELECT 1 FROM event_tag_assignments eta
-        WHERE eta.event_id = event_id AND eta.tag_id IN (${tagPlaceholders})
-      )`);
+      whereClauses.push(`event_tag_id IN (${tagPlaceholders})`);
       params.push(...tagIdArray);
     }
 
@@ -339,9 +333,12 @@ async function getEvent(req, res) {
         b.address_state,
         b.address_zip,
         b.phone,
-        b.website
+        b.website,
+        et.id as tag_id,
+        et.name as tag_name
       FROM events e
       INNER JOIN bars b ON e.bar_id = b.id
+      LEFT JOIN event_tags et ON e.event_tag_id = et.id
       WHERE e.id = ? AND e.is_active = 1 AND b.is_active = 1
     `;
 
@@ -353,16 +350,15 @@ async function getEvent(req, res) {
 
     const event = rows[0];
 
-    // Get event tags
-    const tagsSql = `
-      SELECT et.id, et.name
-      FROM event_tags et
-      INNER JOIN event_tag_assignments eta ON et.id = eta.tag_id
-      WHERE eta.event_id = ?
-      ORDER BY et.name
-    `;
-    const [tagRows] = await db.query(tagsSql, [eventId]);
-    event.tags = tagRows;
+    // Set tag information
+    event.tag = event.tag_id ? {
+      id: event.tag_id,
+      name: event.tag_name
+    } : null;
+    
+    // Clean up the flattened tag fields
+    delete event.tag_id;
+    delete event.tag_name;
 
     // Get upcoming instances (next 10)
     const instancesSql = `
@@ -408,8 +404,9 @@ async function getEventInstance(req, res) {
         COALESCE(ei.custom_description, e.description) as description,
         COALESCE(ei.custom_image_url, e.image_url) as image_url,
         e.title,
-        e.category,
         e.external_link,
+        et.id as tag_id,
+        et.name as tag_name,
         e.recurrence_pattern,
         b.name as bar_name,
         b.address_street,
@@ -421,6 +418,7 @@ async function getEventInstance(req, res) {
       FROM event_instances ei
       INNER JOIN events e ON ei.event_id = e.id
       INNER JOIN bars b ON e.bar_id = b.id
+      LEFT JOIN event_tags et ON e.event_tag_id = et.id
       WHERE ei.id = ? AND e.is_active = 1 AND b.is_active = 1
     `;
 
@@ -432,16 +430,15 @@ async function getEventInstance(req, res) {
 
     const instance = rows[0];
 
-    // Get event tags
-    const tagsSql = `
-      SELECT et.id, et.name
-      FROM event_tags et
-      INNER JOIN event_tag_assignments eta ON et.id = eta.tag_id
-      WHERE eta.event_id = ?
-      ORDER BY et.name
-    `;
-    const [tagRows] = await db.query(tagsSql, [instance.event_id]);
-    instance.tags = tagRows;
+    // Set tag information
+    instance.tag = instance.tag_id ? {
+      id: instance.tag_id,
+      name: instance.tag_name
+    } : null;
+    
+    // Clean up the flattened tag fields
+    delete instance.tag_id;
+    delete instance.tag_name;
 
     return res.json({ 
       success: true, 
@@ -642,12 +639,14 @@ async function updateEvent(req, res) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Validate category if provided
-    if (payload.category) {
-      const validCategories = ['live_music', 'trivia', 'happy_hour', 'sports', 'comedy'];
-      if (!validCategories.includes(payload.category)) {
+    // Validate tag exists if provided
+    if (payload.event_tag_id) {
+      const tagCheckSql = `SELECT id, name FROM event_tags WHERE id = ?`;
+      const [tagRows] = await db.execute(tagCheckSql, [payload.event_tag_id]);
+      
+      if (!tagRows || tagRows.length === 0) {
         return res.status(400).json({ 
-          error: 'Invalid category. Must be one of: ' + validCategories.join(', ') 
+          error: 'Invalid event_tag_id. Event tag not found.' 
         });
       }
     }
@@ -689,7 +688,7 @@ async function updateEvent(req, res) {
         start_time = COALESCE(?, start_time),
         end_time = COALESCE(?, end_time),
         crosses_midnight = COALESCE(?, crosses_midnight),
-        category = COALESCE(?, category),
+        event_tag_id = COALESCE(?, event_tag_id),
         external_link = ?,
         image_url = ?,
         updated_at = CURRENT_TIMESTAMP
@@ -702,7 +701,7 @@ async function updateEvent(req, res) {
       payload.start_time,
       payload.end_time,
       crossesMidnight,
-      payload.category,
+      payload.event_tag_id,
       payload.external_link || null,
       payload.image_url || null,
       eventId

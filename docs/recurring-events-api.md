@@ -17,7 +17,6 @@ events:
 - end_time (TIME) - Default end time (HH:MM:SS)
 - crosses_midnight (boolean) - Whether event times cross midnight (auto-calculated)
 - image_url (string) - Default image URL (optional)
-- category (enum) - Event category: 'live_music', 'trivia', 'happy_hour', 'sports', 'comedy'
 - external_link (string) - External link (optional)
 - recurrence_pattern (enum) - 'none', 'daily', 'weekly', 'monthly'
 - recurrence_days (JSON) - Array of day numbers [0,1,2,3,4,5,6] where 0=Sunday
@@ -59,10 +58,10 @@ Creates a master event and generates instances based on recurrence pattern.
   "start_time": "HH:MM:SS",
   "end_time": "HH:MM:SS", 
   "image_url": "string", // optional
-  "category": "live_music|trivia|happy_hour|sports|comedy",
+  "event_tag_id": "uuid", // event tag UUID from event_tags table
   "external_link": "string", // optional
   "recurrence_pattern": "none|daily|weekly|monthly", // default: "none"
-  "recurrence_days": [0,1,2,3,4,5,6], // required for weekly/monthly
+  "recurrence_days": [0,1,2,3,4,5,6], // required for weekly only
   "recurrence_start_date": "YYYY-MM-DD", // required (event date for one-time events)
   "recurrence_end_date": "YYYY-MM-DD" // required for recurring events
 }
@@ -80,7 +79,7 @@ One-time event:
   "description": "Special one-night jazz performance",
   "start_time": "20:00:00",
   "end_time": "23:00:00",
-  "category": "live_music",
+  "event_tag_id": "456e7890-e89b-12d3-a456-426614174001",
   "recurrence_pattern": "none",
   "recurrence_start_date": "2024-12-15"
 }
@@ -93,7 +92,7 @@ Weekly recurring event:
   "title": "Trivia Night",
   "start_time": "19:00:00",
   "end_time": "21:00:00",
-  "category": "trivia",
+  "event_tag_id": "789e0123-e89b-12d3-a456-426614174002",
   "recurrence_pattern": "weekly",
   "recurrence_days": [3], // Wednesday (0=Sunday, 3=Wednesday)
   "recurrence_start_date": "2024-01-01",
@@ -108,7 +107,6 @@ Returns event instances (individual occurrences) with filtering and pagination.
 
 **Query Parameters:**
 - `bar_id` - Filter by specific bar
-- `category` - Filter by event category  
 - `date_from` - Filter instances from this date (YYYY-MM-DD)
 - `date_to` - Filter instances until this date (YYYY-MM-DD)
 - `upcoming` - If 'true', only show future instances
@@ -131,7 +129,6 @@ Returns event instances (individual occurrences) with filtering and pagination.
       "description": "Event description",
       "image_url": "url",
       "title": "Event Title",
-      "category": "live_music",
       "external_link": "url",
       "bar_id": "uuid",
       "bar_name": "Bar Name",
@@ -165,7 +162,6 @@ Returns a master event with recurrence info and upcoming instances.
     "description": "Weekly trivia competition",
     "start_time": "19:00:00",
     "end_time": "21:00:00",
-    "category": "trivia",
     "recurrence_pattern": "weekly",
     "recurrence_days": [3],
     "recurrence_start_date": "2024-01-01", 
@@ -246,7 +242,7 @@ These views can be queried directly for optimized performance:
 
 ```sql
 SELECT * FROM upcoming_event_instances 
-WHERE bar_id = ? AND category = 'trivia'
+WHERE bar_id = ? 
 ORDER BY date ASC;
 ```
 
@@ -270,8 +266,8 @@ ORDER BY date ASC;
 
 ### Monthly  
 - `recurrence_pattern`: "monthly"
-- `recurrence_days`: Array of weekdays [0-6]
-- Creates instances on the same day of month as start date, but only on specified weekdays
+- `recurrence_days`: ignored (not required)
+- Creates instances on the same day of month as the start date
 
 ## Benefits
 

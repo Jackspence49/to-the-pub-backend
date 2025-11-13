@@ -113,7 +113,7 @@ The setup creates the following tables:
 - **`events`** - Master events with recurrence patterns
 - **`event_instances`** - Specific event occurrences
 - **`event_tags`** - Event categories (Live Music, Trivia, etc.)
-- **`event_tag_assignments`** - Links events to their tags
+- **`events`** - Master event definitions with direct link to event_tags via event_tag_id
 
 ### User Management
 - **`web_users`** - Application users with roles

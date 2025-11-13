@@ -8,7 +8,7 @@ const { authenticateToken } = require('../utils/auth');
 /**
  * GET /events
  * Get all events with optional filtering
- * Query params: bar_id, category, date_from, date_to, upcoming, tag_ids, page, limit
+ * Query params: bar_id, date_from, date_to, upcoming, tag_ids, page, limit
  */
 router.get('/', eventsController.getAllEvents);
 

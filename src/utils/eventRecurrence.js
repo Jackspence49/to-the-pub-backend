@@ -7,7 +7,7 @@
  * @param {Object} event - The master event object
  * @param {string} event.id - Event ID
  * @param {string} event.recurrence_pattern - 'none', 'daily', 'weekly', 'monthly'
- * @param {Array} event.recurrence_days - Array of day numbers [0-6] where 0=Sunday
+ * @param {Array} event.recurrence_days - Array of day numbers [0-6] where 0=Sunday (required for weekly only)
  * @param {string} event.recurrence_start_date - Start date (YYYY-MM-DD)
  * @param {string} event.recurrence_end_date - End date (YYYY-MM-DD)
  * @returns {Array} Array of instance objects to be inserted
@@ -46,12 +46,10 @@ function generateEventInstances(event) {
         break;
       
       case 'monthly':
-        // For monthly, use the same day of month as start date
-        // Only create instance if we're on the right day of month and in recurrence_days
-        const dayOfWeek2 = currentDate.getDay();
+        // For monthly, create instance on the same day of month as start date
         const dayOfMonth = currentDate.getDate();
         const startDayOfMonth = startDate.getDate();
-        shouldCreateInstance = dayOfMonth === startDayOfMonth && recurrenceDays.includes(dayOfWeek2);
+        shouldCreateInstance = dayOfMonth === startDayOfMonth;
         break;
     }
 
@@ -118,10 +116,10 @@ function validateRecurrenceData(recurrenceData) {
       }
     }
 
-    // Validate recurrence_days for weekly and monthly patterns
-    if (recurrence_pattern === 'weekly' || recurrence_pattern === 'monthly') {
+    // Validate recurrence_days for weekly patterns only
+    if (recurrence_pattern === 'weekly') {
       if (!recurrence_days) {
-        errors.push('recurrence_days is required for weekly and monthly events');
+        errors.push('recurrence_days is required for weekly events');
       } else {
         let daysArray;
         try {
@@ -170,19 +168,17 @@ function getRecurrenceDescription(event) {
     return 'One-time event';
   }
 
-  const recurrenceDays = Array.isArray(event.recurrence_days) 
-    ? event.recurrence_days 
-    : JSON.parse(event.recurrence_days || '[]');
-  
-  const dayNames = recurrenceDays.map(getDayName);
-
   switch (event.recurrence_pattern) {
     case 'daily':
       return 'Daily';
     case 'weekly':
+      const recurrenceDays = Array.isArray(event.recurrence_days) 
+        ? event.recurrence_days 
+        : JSON.parse(event.recurrence_days || '[]');
+      const dayNames = recurrenceDays.map(getDayName);
       return `Weekly on ${dayNames.join(', ')}`;
     case 'monthly':
-      return `Monthly on ${dayNames.join(', ')}`;
+      return 'Monthly';
     default:
       return 'Unknown pattern';
   }

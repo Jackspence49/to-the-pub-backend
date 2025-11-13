@@ -85,11 +85,11 @@ CREATE TABLE events (
     bar_id CHAR(36) NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
+    event_tag_id CHAR(36),
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     crosses_midnight BOOLEAN DEFAULT FALSE,
     image_url VARCHAR(500),
-    category ENUM('live_music', 'trivia', 'happy_hour', 'sports', 'comedy') NOT NULL,
     external_link VARCHAR(500),
     
     -- Recurrence fields
@@ -103,7 +103,9 @@ CREATE TABLE events (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE,
+    FOREIGN KEY (event_tag_id) REFERENCES event_tags(id) ON DELETE SET NULL,
     INDEX idx_events_bar_id (bar_id),
+    INDEX idx_events_event_tag_id (event_tag_id),
     INDEX idx_events_active (is_active),
     INDEX idx_events_pattern (recurrence_pattern),
     INDEX idx_events_recurrence_dates (recurrence_start_date, recurrence_end_date)
@@ -131,15 +133,6 @@ CREATE TABLE event_instances (
     INDEX idx_instances_date (date),
     INDEX idx_instances_event_id (event_id),
     INDEX idx_instances_cancelled (is_cancelled)
-);
-
--- Junction table for events and tags
-CREATE TABLE event_tag_assignments (
-    event_id CHAR(36) NOT NULL,
-    tag_id CHAR(36) NOT NULL,
-    PRIMARY KEY (event_id, tag_id),
-    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
-    FOREIGN KEY (tag_id) REFERENCES event_tags(id) ON DELETE CASCADE
 );
 
 -- ===========================
@@ -179,7 +172,6 @@ SELECT
     COALESCE(ei.custom_description, e.description) as description,
     COALESCE(ei.custom_image_url, e.image_url) as image_url,
     e.title,
-    e.category,
     e.external_link,
     e.bar_id,
     b.name as bar_name,
@@ -207,7 +199,6 @@ SELECT
     COALESCE(ei.custom_description, e.description) as description,
     COALESCE(ei.custom_image_url, e.image_url) as image_url,
     e.title,
-    e.category,
     e.external_link,
     e.bar_id,
     b.name as bar_name,

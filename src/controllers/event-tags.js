@@ -106,7 +106,7 @@ async function deleteEventTag(req, res) {
     const userId = req.user.userId; // From JWT
     
     // Check if tag is used by any events
-    const checkUsageSql = `SELECT COUNT(*) as count FROM event_tag_assignments WHERE event_tag_id = ?`;
+    const checkUsageSql = `SELECT COUNT(*) as count FROM events WHERE event_tag_id = ?`;
     const [usageRows] = await db.execute(checkUsageSql, [tagId]);
     
     if (usageRows[0].count > 0) {
