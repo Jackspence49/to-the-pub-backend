@@ -583,68 +583,9 @@ async function updateEventInstance(req, res) {
 }
 
 /**
- * GET /bars/:barId/events
- * Returns all events (masters) for a specific bar
- */
-async function getBarEvents(req, res) {
-  try {
-    const barId = req.params.barId;
-    const { include_instances, limit = 50 } = req.query;
-
-    // Check if bar exists and is active
-    const barCheckSql = `SELECT id, name FROM bars WHERE id = ? AND is_active = 1`;
-    const [barRows] = await db.execute(barCheckSql, [barId]);
-
-    if (!barRows || barRows.length === 0) {
-      return res.status(404).json({ error: 'Bar not found' });
-    }
-
-    const selectSql = `
-      SELECT * FROM events 
-      WHERE bar_id = ? AND is_active = 1 
-      ORDER BY recurrence_start_date DESC, created_at DESC 
-      LIMIT ?
-    `;
-
-    const [rows] = await db.query(selectSql, [barId, parseInt(limit)]);
-
-    // Optionally include upcoming instances for each event
-    if (include_instances === 'true') {
-      for (const event of rows) {
-        const instancesSql = `
-          SELECT id as instance_id, date, is_cancelled
-          FROM event_instances 
-          WHERE event_id = ? AND date >= CURDATE() 
-          ORDER BY date ASC 
-          LIMIT 5
-        `;
-        const [instanceRows] = await db.query(instancesSql, [event.id]);
-        event.upcoming_instances = instanceRows;
-        event.recurrence_description = getRecurrenceDescription(event);
-      }
-    }
-
-    return res.json({
-      success: true,
-      data: rows,
-      meta: {
-        bar: {
-          id: barRows[0].id,
-          name: barRows[0].name
-        },
-        count: rows.length,
-        include_instances: include_instances === 'true'
-      }
-    });
-  } catch (err) {
-    console.error('Error fetching bar events:', err.message || err);
-    return res.status(500).json({ error: 'Failed to fetch bar events' });
-  }
-}
-
-/**
  * PUT /events/:id
  * Updates a master event (affects future instances)
+ * Now supports updating dates and recurrence patterns with automatic instance regeneration
  */
 async function updateEvent(req, res) {
   try {
@@ -652,13 +593,20 @@ async function updateEvent(req, res) {
     const payload = req.body;
     const userId = req.user.userId; // From JWT
 
-    // Check if event exists and is active
-    const checkSql = `SELECT id, title FROM events WHERE id = ? AND is_active = 1`;
+    // Check if event exists and is active, and get current values
+    const checkSql = `
+      SELECT id, title, recurrence_pattern, recurrence_days, 
+             recurrence_start_date, recurrence_end_date, 
+             start_time, end_time, crosses_midnight
+      FROM events WHERE id = ? AND is_active = 1
+    `;
     const [checkRows] = await db.execute(checkSql, [eventId]);
 
     if (!checkRows || checkRows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
+
+    const currentEvent = checkRows[0];
 
     // Validate tag exists if provided
     if (payload.event_tag_id) {
@@ -686,7 +634,58 @@ async function updateEvent(req, res) {
         });
       }
     }
-    
+
+    // Validate date formats if provided
+    if (payload.recurrence_start_date || payload.recurrence_end_date) {
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (payload.recurrence_start_date && !dateRegex.test(payload.recurrence_start_date)) {
+        return res.status(400).json({ 
+          error: 'recurrence_start_date must be in YYYY-MM-DD format' 
+        });
+      }
+      if (payload.recurrence_end_date && !dateRegex.test(payload.recurrence_end_date)) {
+        return res.status(400).json({ 
+          error: 'recurrence_end_date must be in YYYY-MM-DD format' 
+        });
+      }
+    }
+
+    // Validate that start date is not in the past if being updated
+    if (payload.recurrence_start_date) {
+      const startDate = new Date(payload.recurrence_start_date + 'T00:00:00');
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (startDate < today) {
+        return res.status(400).json({ 
+          error: 'Event start date cannot be in the past' 
+        });
+      }
+    }
+
+    // If recurrence data is being updated, validate it
+    const updatedRecurrenceData = {
+      recurrence_pattern: payload.recurrence_pattern || currentEvent.recurrence_pattern,
+      recurrence_days: payload.recurrence_days !== undefined ? payload.recurrence_days : 
+                      (currentEvent.recurrence_days ? JSON.parse(currentEvent.recurrence_days) : null),
+      recurrence_start_date: payload.recurrence_start_date || currentEvent.recurrence_start_date,
+      recurrence_end_date: payload.recurrence_end_date || currentEvent.recurrence_end_date
+    };
+
+    const validation = validateRecurrenceData(updatedRecurrenceData);
+    if (!validation.isValid) {
+      return res.status(400).json({ 
+        error: 'Recurrence validation failed',
+        details: validation.errors 
+      });
+    }
+
+    // Check if recurrence or date data has changed (requires instance regeneration)
+    const recurrenceChanged = 
+      payload.recurrence_pattern !== undefined ||
+      payload.recurrence_days !== undefined ||
+      payload.recurrence_start_date !== undefined ||
+      payload.recurrence_end_date !== undefined;
+
     // If both times provided, calculate crosses_midnight
     let crossesMidnight = null;
     if (payload.start_time && payload.end_time) {
@@ -699,40 +698,142 @@ async function updateEvent(req, res) {
       } else {
         crossesMidnight = false;
       }
+    } else if (payload.start_time || payload.end_time) {
+      // Only one time provided - need to calculate with the other existing time
+      const startTime = (payload.start_time || currentEvent.start_time).split(':').map(Number);
+      const endTime = (payload.end_time || currentEvent.end_time).split(':').map(Number);
+      
+      if (endTime[0] < startTime[0] || 
+          (endTime[0] === startTime[0] && endTime[1] < startTime[1])) {
+        crossesMidnight = true;
+      } else {
+        crossesMidnight = false;
+      }
     }
 
-    // Update event
-    const updateSql = `
-      UPDATE events SET 
-        title = COALESCE(?, title),
-        description = COALESCE(?, description),
-        start_time = COALESCE(?, start_time),
-        end_time = COALESCE(?, end_time),
-        crosses_midnight = COALESCE(?, crosses_midnight),
-        event_tag_id = COALESCE(?, event_tag_id),
-        external_link = ?,
-        image_url = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `;
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    await db.execute(updateSql, [
-      payload.title,
-      payload.description,
-      payload.start_time,
-      payload.end_time,
-      crossesMidnight,
-      payload.event_tag_id,
-      payload.external_link || null,
-      payload.image_url || null,
-      eventId
-    ]);
+      // Update the master event
+      const updateSql = `
+        UPDATE events SET 
+          title = COALESCE(?, title),
+          description = COALESCE(?, description),
+          start_time = COALESCE(?, start_time),
+          end_time = COALESCE(?, end_time),
+          crosses_midnight = COALESCE(?, crosses_midnight),
+          event_tag_id = COALESCE(?, event_tag_id),
+          external_link = ?,
+          image_url = ?,
+          recurrence_pattern = COALESCE(?, recurrence_pattern),
+          recurrence_days = ?,
+          recurrence_start_date = COALESCE(?, recurrence_start_date),
+          recurrence_end_date = COALESCE(?, recurrence_end_date),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `;
 
-    return res.json({ 
-      success: true, 
-      message: 'Event updated successfully',
-      data: { id: eventId }
-    });
+      await conn.execute(updateSql, [
+        payload.title || null,
+        payload.description || null,
+        payload.start_time || null,
+        payload.end_time || null,
+        crossesMidnight,
+        payload.event_tag_id || null,
+        payload.external_link || null,
+        payload.image_url || null,
+        payload.recurrence_pattern || null,
+        payload.recurrence_days !== undefined ? JSON.stringify(payload.recurrence_days) : null,
+        payload.recurrence_start_date || null,
+        payload.recurrence_end_date || null,
+        eventId
+      ]);
+
+      // If recurrence data changed, regenerate future instances
+      if (recurrenceChanged) {
+        // Delete all future instances (keep past ones to preserve history)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todayStr = today.toISOString().split('T')[0];
+        
+        await conn.execute(
+          `DELETE FROM event_instances WHERE event_id = ? AND date >= ?`,
+          [eventId, todayStr]
+        );
+
+        // Generate new instances using updated recurrence data
+        const eventForGeneration = {
+          id: eventId,
+          recurrence_pattern: updatedRecurrenceData.recurrence_pattern,
+          recurrence_days: updatedRecurrenceData.recurrence_days,
+          recurrence_start_date: updatedRecurrenceData.recurrence_start_date,
+          recurrence_end_date: updatedRecurrenceData.recurrence_end_date
+        };
+
+        const instances = generateEventInstances(eventForGeneration);
+        
+        // Filter instances to only include future dates (from today onwards)
+        const futureInstances = instances.filter(instance => instance.date >= todayStr);
+        
+        if (futureInstances.length > 0) {
+          const insertInstanceSql = `
+            INSERT INTO event_instances (id, event_id, date, crosses_midnight) 
+            VALUES (?, ?, ?, ?)
+          `;
+          
+          // Use the updated crosses_midnight value for new instances
+          const finalCrossesMidnight = crossesMidnight !== null ? crossesMidnight : currentEvent.crosses_midnight;
+          
+          for (const instance of futureInstances) {
+            const instanceId = uuidv4();
+            await conn.execute(insertInstanceSql, [
+              instanceId, 
+              instance.event_id, 
+              instance.date, 
+              finalCrossesMidnight ? 1 : 0
+            ]);
+          }
+        }
+
+        await conn.commit();
+
+        return res.json({ 
+          success: true, 
+          message: 'Event updated successfully with regenerated instances',
+          data: { 
+            id: eventId,
+            instances_regenerated: futureInstances.length,
+            recurrence_description: getRecurrenceDescription(eventForGeneration)
+          }
+        });
+      } else {
+        // No recurrence changes, just update existing instances' crosses_midnight if time changed
+        if (crossesMidnight !== null) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const todayStr = today.toISOString().split('T')[0];
+          
+          await conn.execute(
+            `UPDATE event_instances SET crosses_midnight = ? WHERE event_id = ? AND date >= ? AND custom_start_time IS NULL AND custom_end_time IS NULL`,
+            [crossesMidnight ? 1 : 0, eventId, todayStr]
+          );
+        }
+
+        await conn.commit();
+
+        return res.json({ 
+          success: true, 
+          message: 'Event updated successfully',
+          data: { id: eventId }
+        });
+      }
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
   } catch (err) {
     console.error('Error updating event:', err.message || err);
     return res.status(500).json({ error: 'Failed to update event' });
@@ -777,7 +878,6 @@ module.exports = {
   getEvent,
   getEventInstance,
   updateEventInstance,
-  getBarEvents,
   updateEvent,
   deleteEvent,
   
