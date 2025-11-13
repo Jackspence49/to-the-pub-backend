@@ -23,7 +23,7 @@ async function setupDatabase() {
     console.log('Connected to MySQL server');
     
     // Read the SQL file
-    const sqlFile = path.join(__dirname, 'create_database.sql');
+    const sqlFile = path.join(__dirname, 'fresh-schema.sql');
     const sqlContent = fs.readFileSync(sqlFile, 'utf8');
     
     // Split the SQL content into individual statements
