@@ -105,16 +105,6 @@ async function deleteEventTag(req, res) {
     const tagId = req.params.id;
     const userId = req.user.userId; // From JWT
     
-    // First, get the tag details before deletion
-    const getTagSql = `SELECT id, name FROM event_tags WHERE id = ?`;
-    const [tagRows] = await db.execute(getTagSql, [tagId]);
-    
-    if (tagRows.length === 0) {
-      return res.status(404).json({ error: 'Event tag not found' });
-    }
-    
-    const tagData = tagRows[0];
-    
     // Check if tag is used by any events
     const checkUsageSql = `SELECT COUNT(*) as count FROM event_tag_assignments WHERE event_tag_id = ?`;
     const [usageRows] = await db.execute(checkUsageSql, [tagId]);
@@ -128,16 +118,26 @@ async function deleteEventTag(req, res) {
     const deleteSql = `DELETE FROM event_tags WHERE id = ?`;
     const [result] = await db.execute(deleteSql, [tagId]);
     
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Event tag not found' });
+    }
+    
     return res.json({
       success: true,
       message: 'Event tag deleted successfully',
-      data: { id: tagData.id, name: tagData.name }
+      data: { id: tagId }
     });
   } catch (err) {
     console.error('Error deleting event tag:', err.message || err);
     return res.status(500).json({ error: 'Failed to delete event tag' });
   }
 }
+
+
+
+
+
+
 
 
 

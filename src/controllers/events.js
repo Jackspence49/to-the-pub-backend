@@ -1,30 +1,48 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
+const { 
+  generateEventInstances, 
+  validateRecurrenceData, 
+  getRecurrenceDescription 
+} = require('../utils/eventRecurrence');
 
 /**
  * POST /events
- * Creates a new event for a bar
+ * Creates a new event (recurring or one-time) with instances
  * Expected payload shape:
  * {
  *   bar_id: 'uuid',
  *   title: 'string',
  *   description: 'string', // optional
- *   date: 'YYYY-MM-DD',
  *   start_time: 'HH:MM:SS',
  *   end_time: 'HH:MM:SS',
  *   image_url: 'string', // optional
  *   category: 'live_music|trivia|happy_hour|sports|comedy',
- *   external_link: 'string' // optional
+ *   external_link: 'string', // optional
+ *   recurrence_pattern: 'none|daily|weekly|monthly', // default: 'none'
+ *   recurrence_days: [0,1,2,3,4,5,6], // array of day numbers, required for weekly/monthly
+ *   recurrence_start_date: 'YYYY-MM-DD', // required for recurring events, or single event date
+ *   recurrence_end_date: 'YYYY-MM-DD' // required for recurring events
  * }
  */
 async function createEvent(req, res) {
   const payload = req.body;
 
   // Basic validation
-  if (!payload || !payload.bar_id || !payload.title || !payload.date || 
+  if (!payload || !payload.bar_id || !payload.title || 
       !payload.start_time || !payload.end_time || !payload.category) {
     return res.status(400).json({ 
-      error: 'Missing required fields: bar_id, title, date, start_time, end_time, category' 
+      error: 'Missing required fields: bar_id, title, start_time, end_time, category' 
+    });
+  }
+
+  // Set default recurrence pattern
+  const recurrencePattern = payload.recurrence_pattern || 'none';
+  
+  // For non-recurring events, require recurrence_start_date as the event date
+  if (recurrencePattern === 'none' && !payload.recurrence_start_date) {
+    return res.status(400).json({ 
+      error: 'recurrence_start_date is required (use as event date for one-time events)' 
     });
   }
 
@@ -33,14 +51,6 @@ async function createEvent(req, res) {
   if (!validCategories.includes(payload.category)) {
     return res.status(400).json({ 
       error: `Invalid category. Must be one of: ${validCategories.join(', ')}` 
-    });
-  }
-
-  // Validate date format (YYYY-MM-DD)
-  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  if (!dateRegex.test(payload.date)) {
-    return res.status(400).json({ 
-      error: 'Date must be in YYYY-MM-DD format' 
     });
   }
 
@@ -59,13 +69,29 @@ async function createEvent(req, res) {
     });
   }
 
-  // Validate that date is not in the past
-  const eventDate = new Date(payload.date);
+  // Validate recurrence data
+  const recurrenceData = {
+    recurrence_pattern: recurrencePattern,
+    recurrence_days: payload.recurrence_days,
+    recurrence_start_date: payload.recurrence_start_date,
+    recurrence_end_date: payload.recurrence_end_date
+  };
+  
+  const validation = validateRecurrenceData(recurrenceData);
+  if (!validation.isValid) {
+    return res.status(400).json({ 
+      error: 'Recurrence validation failed',
+      details: validation.errors 
+    });
+  }
+
+  // Validate that start date is not in the past
+  const startDate = new Date(payload.recurrence_start_date);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  if (eventDate < today) {
+  if (startDate < today) {
     return res.status(400).json({ 
-      error: 'Event date cannot be in the past' 
+      error: 'Event start date cannot be in the past' 
     });
   }
 
@@ -82,50 +108,69 @@ async function createEvent(req, res) {
       return res.status(404).json({ error: 'Bar not found or inactive' });
     }
 
-    // Check for duplicate event (same bar, title, date, and time)
-    const duplicateCheckSql = `
-      SELECT id FROM events 
-      WHERE bar_id = ? AND LOWER(TRIM(title)) = LOWER(TRIM(?)) 
-      AND date = ? AND start_time = ? AND is_active = 1
-    `;
-    const [duplicateRows] = await conn.execute(duplicateCheckSql, [
-      payload.bar_id, payload.title, payload.date, payload.start_time
-    ]);
-
-    if (duplicateRows.length > 0) {
-      await conn.rollback();
-      return res.status(409).json({ error: 'An event with this title, date, and time already exists for this bar' });
-    }
-
-    // Insert the new event
+    // Create the master event
     const eventId = uuidv4();
     const insertEventSql = `
       INSERT INTO events (
-        id, bar_id, title, description, date, start_time, end_time, 
-        image_url, category, external_link, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, bar_id, title, description, start_time, end_time, 
+        image_url, category, external_link, recurrence_pattern, 
+        recurrence_days, recurrence_start_date, recurrence_end_date, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
+    
     const eventParams = [
       eventId,
       payload.bar_id,
       payload.title,
       payload.description || null,
-      payload.date,
       payload.start_time,
       payload.end_time,
       payload.image_url || null,
       payload.category,
       payload.external_link || null,
+      recurrencePattern,
+      recurrencePattern !== 'none' ? JSON.stringify(payload.recurrence_days || []) : null,
+      payload.recurrence_start_date,
+      payload.recurrence_end_date || payload.recurrence_start_date, // For one-time events, end = start
       1
     ];
     
     await conn.execute(insertEventSql, eventParams);
+
+    // Generate and insert event instances
+    const eventForGeneration = {
+      id: eventId,
+      recurrence_pattern: recurrencePattern,
+      recurrence_days: payload.recurrence_days,
+      recurrence_start_date: payload.recurrence_start_date,
+      recurrence_end_date: payload.recurrence_end_date || payload.recurrence_start_date
+    };
+
+    const instances = generateEventInstances(eventForGeneration);
+    
+    if (instances.length > 0) {
+      const insertInstanceSql = `
+        INSERT INTO event_instances (id, event_id, date) 
+        VALUES (?, ?, ?)
+      `;
+      
+      for (const instance of instances) {
+        const instanceId = uuidv4();
+        await conn.execute(insertInstanceSql, [instanceId, instance.event_id, instance.date]);
+      }
+    }
+
     await conn.commit();
 
     return res.status(201).json({ 
       success: true,
       message: 'Event created successfully',
-      data: { id: eventId, bar_name: barRows[0].name }
+      data: { 
+        id: eventId, 
+        bar_name: barRows[0].name,
+        recurrence_description: getRecurrenceDescription(eventForGeneration),
+        instances_created: instances.length
+      }
     });
   } catch (err) {
     await conn.rollback();
@@ -137,19 +182,11 @@ async function createEvent(req, res) {
 }
 
 /**
- * GET /events?bar_id=uuid&category=live_music&date_from=2024-01-01&date_to=2024-12-31&tag_ids=uuid1,uuid2&page=1&limit=20
- * Returns events with optional filtering
- * Query parameters:
- * - bar_id: filter by specific bar
- * - category: filter by event category
- * - date_from: filter events from this date (YYYY-MM-DD)
- * - date_to: filter events until this date (YYYY-MM-DD)
- * - upcoming: if 'true', only show future events
- * - tag_ids: comma-separated list of tag IDs to filter by
- * - page: page number for pagination (default: 1)
- * - limit: maximum number of results per page (default: 20)
+ * GET /events/instances?bar_id=uuid&category=live_music&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&page=1&limit=20
+ * Returns event instances with optional filtering
+ * This replaces the old getAllEvents function to work with the new schema
  */
-async function getAllEvents(req, res) {
+async function getEventInstances(req, res) {
   try {
     const { 
       bar_id, 
@@ -187,10 +224,10 @@ async function getAllEvents(req, res) {
       tagIdArray = tag_ids.split(',').map(id => id.trim()).filter(id => id.length > 0);
     }
 
-    // Build dynamic query
-    let selectClauses = ['e.*', 'b.name as bar_name', 'b.address_city', 'b.address_state'];
-    let joinClauses = ['INNER JOIN bars b ON e.bar_id = b.id'];
-    let whereClauses = ['e.is_active = 1', 'b.is_active = 1'];
+    // Build dynamic query using the view for better performance
+    let baseView = upcoming === 'true' ? 'upcoming_event_instances' : 'all_event_instances';
+    let selectClauses = ['*'];
+    let whereClauses = [];
     let params = [];
 
     // Add tag filtering with EXISTS subquery if tag_ids provided
@@ -198,41 +235,46 @@ async function getAllEvents(req, res) {
       const tagPlaceholders = tagIdArray.map(() => '?').join(',');
       whereClauses.push(`EXISTS (
         SELECT 1 FROM event_tag_assignments eta
-        WHERE eta.event_id = e.id AND eta.tag_id IN (${tagPlaceholders})
+        WHERE eta.event_id = event_id AND eta.tag_id IN (${tagPlaceholders})
       )`);
       params.push(...tagIdArray);
     }
 
     // Add filter conditions
     if (bar_id) {
-      whereClauses.push('e.bar_id = ?');
+      whereClauses.push('bar_id = ?');
       params.push(bar_id);
     }
 
     if (category) {
-      whereClauses.push('e.category = ?');
+      whereClauses.push('category = ?');
       params.push(category);
     }
 
     if (date_from) {
-      whereClauses.push('e.date >= ?');
+      whereClauses.push('date >= ?');
       params.push(date_from);
     }
 
     if (date_to) {
-      whereClauses.push('e.date <= ?');
+      whereClauses.push('date <= ?');
       params.push(date_to);
     }
 
-    if (upcoming === 'true') {
-      whereClauses.push('e.date >= CURDATE()');
+    // Only add CURDATE filter if not using upcoming view and upcoming is not explicitly set
+    if (upcoming === 'true' && baseView !== 'upcoming_event_instances') {
+      whereClauses.push('date >= CURDATE()');
     }
 
+    // Don't show cancelled instances
+    whereClauses.push('is_cancelled = false');
+
     // Construct query
-    let selectSql = `SELECT ${selectClauses.join(', ')} FROM events e`;
-    selectSql += ` ${joinClauses.join(' ')}`;
-    selectSql += ` WHERE ${whereClauses.join(' AND ')}`;
-    selectSql += ` ORDER BY e.date ASC, e.start_time ASC`;
+    let selectSql = `SELECT ${selectClauses.join(', ')} FROM ${baseView}`;
+    if (whereClauses.length > 0) {
+      selectSql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+    selectSql += ` ORDER BY date ASC, start_time ASC`;
 
     // Add pagination
     const pageNum = parseInt(page);
@@ -244,7 +286,10 @@ async function getAllEvents(req, res) {
     const [rows] = await db.query(selectSql, params);
 
     // Get total count for pagination metadata
-    let countSql = `SELECT COUNT(*) as total FROM events e INNER JOIN bars b ON e.bar_id = b.id WHERE ${whereClauses.join(' AND ')}`;
+    let countSql = `SELECT COUNT(*) as total FROM ${baseView}`;
+    if (whereClauses.length > 0) {
+      countSql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
     const [countRows] = await db.query(countSql, params.slice(0, -2)); // Remove limit and offset params
     const totalCount = countRows[0].total;
 
@@ -268,14 +313,14 @@ async function getAllEvents(req, res) {
       }
     });
   } catch (err) {
-    console.error('Error fetching events:', err.message || err);
-    return res.status(500).json({ error: 'Failed to fetch events' });
+    console.error('Error fetching event instances:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch event instances' });
   }
 }
 
 /**
  * GET /events/:id
- * Returns a single event by ID with its tags
+ * Returns a master event with its recurrence information and upcoming instances
  */
 async function getEvent(req, res) {
   try {
@@ -315,6 +360,21 @@ async function getEvent(req, res) {
     const [tagRows] = await db.query(tagsSql, [eventId]);
     event.tags = tagRows;
 
+    // Get upcoming instances (next 10)
+    const instancesSql = `
+      SELECT id as instance_id, date, is_cancelled, 
+             custom_start_time, custom_end_time, custom_description, custom_image_url
+      FROM event_instances 
+      WHERE event_id = ? AND date >= CURDATE() 
+      ORDER BY date ASC 
+      LIMIT 10
+    `;
+    const [instanceRows] = await db.query(instancesSql, [eventId]);
+    event.upcoming_instances = instanceRows;
+
+    // Add human-readable recurrence description
+    event.recurrence_description = getRecurrenceDescription(event);
+
     return res.json({ 
       success: true, 
       data: event
@@ -326,8 +386,201 @@ async function getEvent(req, res) {
 }
 
 /**
+ * GET /event-instances/:instanceId
+ * Returns a specific event instance with full event details
+ */
+async function getEventInstance(req, res) {
+  try {
+    const instanceId = req.params.instanceId;
+
+    const selectSql = `
+      SELECT 
+        ei.id as instance_id,
+        ei.event_id,
+        ei.date,
+        ei.is_cancelled,
+        COALESCE(ei.custom_start_time, e.start_time) as start_time,
+        COALESCE(ei.custom_end_time, e.end_time) as end_time,
+        COALESCE(ei.custom_description, e.description) as description,
+        COALESCE(ei.custom_image_url, e.image_url) as image_url,
+        e.title,
+        e.category,
+        e.external_link,
+        e.recurrence_pattern,
+        b.name as bar_name,
+        b.address_street,
+        b.address_city, 
+        b.address_state,
+        b.address_zip,
+        b.phone,
+        b.website
+      FROM event_instances ei
+      INNER JOIN events e ON ei.event_id = e.id
+      INNER JOIN bars b ON e.bar_id = b.id
+      WHERE ei.id = ? AND e.is_active = 1 AND b.is_active = 1
+    `;
+
+    const [rows] = await db.query(selectSql, [instanceId]);
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'Event instance not found' });
+    }
+
+    const instance = rows[0];
+
+    // Get event tags
+    const tagsSql = `
+      SELECT et.id, et.name
+      FROM event_tags et
+      INNER JOIN event_tag_assignments eta ON et.id = eta.tag_id
+      WHERE eta.event_id = ?
+      ORDER BY et.name
+    `;
+    const [tagRows] = await db.query(tagsSql, [instance.event_id]);
+    instance.tags = tagRows;
+
+    return res.json({ 
+      success: true, 
+      data: instance
+    });
+  } catch (err) {
+    console.error('Error fetching event instance:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch event instance' });
+  }
+}
+
+/**
+ * PUT /event-instances/:instanceId
+ * Updates a specific event instance (allows customization)
+ */
+async function updateEventInstance(req, res) {
+  try {
+    const instanceId = req.params.instanceId;
+    const payload = req.body;
+
+    // Check if instance exists
+    const checkSql = `
+      SELECT ei.id, ei.event_id, e.title 
+      FROM event_instances ei
+      INNER JOIN events e ON ei.event_id = e.id
+      WHERE ei.id = ? AND e.is_active = 1
+    `;
+    const [checkRows] = await db.execute(checkSql, [instanceId]);
+
+    if (!checkRows || checkRows.length === 0) {
+      return res.status(404).json({ error: 'Event instance not found' });
+    }
+
+    // Validate time format if provided
+    if (payload.custom_start_time || payload.custom_end_time) {
+      const timeRegex = /^([01]?\d|2[0-3]):[0-5]\d:[0-5]\d$/;
+      if (payload.custom_start_time && !timeRegex.test(payload.custom_start_time)) {
+        return res.status(400).json({ 
+          error: 'custom_start_time must be in HH:MM:SS format' 
+        });
+      }
+      if (payload.custom_end_time && !timeRegex.test(payload.custom_end_time)) {
+        return res.status(400).json({ 
+          error: 'custom_end_time must be in HH:MM:SS format' 
+        });
+      }
+    }
+
+    // Update instance
+    const updateSql = `
+      UPDATE event_instances SET 
+        is_cancelled = COALESCE(?, is_cancelled),
+        custom_start_time = ?,
+        custom_end_time = ?,
+        custom_description = ?,
+        custom_image_url = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `;
+
+    await db.execute(updateSql, [
+      payload.is_cancelled,
+      payload.custom_start_time || null,
+      payload.custom_end_time || null,
+      payload.custom_description || null,
+      payload.custom_image_url || null,
+      instanceId
+    ]);
+
+    return res.json({ 
+      success: true, 
+      message: 'Event instance updated successfully',
+      data: { id: instanceId }
+    });
+  } catch (err) {
+    console.error('Error updating event instance:', err.message || err);
+    return res.status(500).json({ error: 'Failed to update event instance' });
+  }
+}
+
+/**
+ * GET /bars/:barId/events
+ * Returns all events (masters) for a specific bar
+ */
+async function getBarEvents(req, res) {
+  try {
+    const barId = req.params.barId;
+    const { include_instances, limit = 50 } = req.query;
+
+    // Check if bar exists and is active
+    const barCheckSql = `SELECT id, name FROM bars WHERE id = ? AND is_active = 1`;
+    const [barRows] = await db.execute(barCheckSql, [barId]);
+
+    if (!barRows || barRows.length === 0) {
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+
+    const selectSql = `
+      SELECT * FROM events 
+      WHERE bar_id = ? AND is_active = 1 
+      ORDER BY recurrence_start_date DESC, created_at DESC 
+      LIMIT ?
+    `;
+
+    const [rows] = await db.query(selectSql, [barId, parseInt(limit)]);
+
+    // Optionally include upcoming instances for each event
+    if (include_instances === 'true') {
+      for (const event of rows) {
+        const instancesSql = `
+          SELECT id as instance_id, date, is_cancelled
+          FROM event_instances 
+          WHERE event_id = ? AND date >= CURDATE() 
+          ORDER BY date ASC 
+          LIMIT 5
+        `;
+        const [instanceRows] = await db.query(instancesSql, [event.id]);
+        event.upcoming_instances = instanceRows;
+        event.recurrence_description = getRecurrenceDescription(event);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: rows,
+      meta: {
+        bar: {
+          id: barRows[0].id,
+          name: barRows[0].name
+        },
+        count: rows.length,
+        include_instances: include_instances === 'true'
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching bar events:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch bar events' });
+  }
+}
+
+/**
  * PUT /events/:id
- * Updates an existing event (protected route)
+ * Updates a master event (affects future instances)
  */
 async function updateEvent(req, res) {
   try {
@@ -336,7 +589,7 @@ async function updateEvent(req, res) {
     const userId = req.user.userId; // From JWT
 
     // Check if event exists and is active
-    const checkSql = `SELECT id, bar_id, title FROM events WHERE id = ? AND is_active = 1`;
+    const checkSql = `SELECT id, title FROM events WHERE id = ? AND is_active = 1`;
     const [checkRows] = await db.execute(checkSql, [eventId]);
 
     if (!checkRows || checkRows.length === 0) {
@@ -348,27 +601,7 @@ async function updateEvent(req, res) {
       const validCategories = ['live_music', 'trivia', 'happy_hour', 'sports', 'comedy'];
       if (!validCategories.includes(payload.category)) {
         return res.status(400).json({ 
-          error: `Invalid category. Must be one of: ${validCategories.join(', ')}` 
-        });
-      }
-    }
-
-    // Validate date format if provided
-    if (payload.date) {
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!dateRegex.test(payload.date)) {
-        return res.status(400).json({ 
-          error: 'Date must be in YYYY-MM-DD format' 
-        });
-      }
-
-      // Validate that date is not in the past
-      const eventDate = new Date(payload.date);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (eventDate < today) {
-        return res.status(400).json({ 
-          error: 'Event date cannot be in the past' 
+          error: 'Invalid category. Must be one of: ' + validCategories.join(', ') 
         });
       }
     }
@@ -388,71 +621,36 @@ async function updateEvent(req, res) {
       }
     }
 
-    const conn = await db.getConnection();
-    try {
-      await conn.beginTransaction();
+    // Update event
+    const updateSql = `
+      UPDATE events SET 
+        title = COALESCE(?, title),
+        description = COALESCE(?, description),
+        start_time = COALESCE(?, start_time),
+        end_time = COALESCE(?, end_time),
+        category = COALESCE(?, category),
+        external_link = ?,
+        image_url = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `;
 
-      // Check for duplicate if title, date, or time is being updated
-      if (payload.title || payload.date || payload.start_time) {
-        const duplicateCheckSql = `
-          SELECT id FROM events 
-          WHERE bar_id = ? AND LOWER(TRIM(title)) = LOWER(TRIM(?)) 
-          AND date = ? AND start_time = ? AND id != ? AND is_active = 1
-        `;
-        const [duplicateRows] = await conn.execute(duplicateCheckSql, [
-          checkRows[0].bar_id,
-          payload.title || checkRows[0].title,
-          payload.date || checkRows[0].date,
-          payload.start_time || checkRows[0].start_time,
-          eventId
-        ]);
+    await db.execute(updateSql, [
+      payload.title,
+      payload.description,
+      payload.start_time,
+      payload.end_time,
+      payload.category,
+      payload.external_link || null,
+      payload.image_url || null,
+      eventId
+    ]);
 
-        if (duplicateRows.length > 0) {
-          await conn.rollback();
-          return res.status(409).json({ error: 'An event with this title, date, and time already exists for this bar' });
-        }
-      }
-
-      // Update event
-      const updateSql = `
-        UPDATE events SET 
-          title = COALESCE(?, title),
-          description = COALESCE(?, description),
-          date = COALESCE(?, date),
-          start_time = COALESCE(?, start_time),
-          end_time = COALESCE(?, end_time),
-          image_url = COALESCE(?, image_url),
-          category = COALESCE(?, category),
-          external_link = COALESCE(?, external_link),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `;
-
-      await conn.execute(updateSql, [
-        payload.title || null,
-        payload.description || null,
-        payload.date || null,
-        payload.start_time || null,
-        payload.end_time || null,
-        payload.image_url || null,
-        payload.category || null,
-        payload.external_link || null,
-        eventId
-      ]);
-
-      await conn.commit();
-
-      return res.json({ 
-        success: true, 
-        message: 'Event updated successfully',
-        data: { id: eventId }
-      });
-    } catch (err) {
-      await conn.rollback();
-      throw err;
-    } finally {
-      conn.release();
-    }
+    return res.json({ 
+      success: true, 
+      message: 'Event updated successfully',
+      data: { id: eventId }
+    });
   } catch (err) {
     console.error('Error updating event:', err.message || err);
     return res.status(500).json({ error: 'Failed to update event' });
@@ -461,19 +659,24 @@ async function updateEvent(req, res) {
 
 /**
  * DELETE /events/:id
- * Soft deletes an event (sets is_active to false) - (protected route)
+ * Soft deletes an event (sets is_active = false)
  */
 async function deleteEvent(req, res) {
   try {
     const eventId = req.params.id;
     const userId = req.user.userId; // From JWT
 
-    const deleteSql = `UPDATE events SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = 1`;
-    const [result] = await db.execute(deleteSql, [eventId]);
+    // Check if event exists and is active
+    const checkSql = `SELECT id, title FROM events WHERE id = ? AND is_active = 1`;
+    const [checkRows] = await db.execute(checkSql, [eventId]);
 
-    if (result.affectedRows === 0) {
+    if (!checkRows || checkRows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
+
+    // Soft delete the event
+    const deleteSql = `UPDATE events SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
+    await db.execute(deleteSql, [eventId]);
 
     return res.json({ 
       success: true, 
@@ -486,143 +689,16 @@ async function deleteEvent(req, res) {
   }
 }
 
-/**
- * GET /bars/:barId/events
- * Returns all events for a specific bar
- * Query parameters:
- * - upcoming: if 'true', only show future events
- * - category: filter by event category
- * - limit: maximum number of results (default: 50)
- */
-async function getBarEvents(req, res) {
-  try {
-    const barId = req.params.barId;
-    const { upcoming, category, limit = 50 } = req.query;
-
-    // Check if bar exists and is active
-    const barCheckSql = `SELECT id, name FROM bars WHERE id = ? AND is_active = 1`;
-    const [barRows] = await db.execute(barCheckSql, [barId]);
-
-    if (!barRows || barRows.length === 0) {
-      return res.status(404).json({ error: 'Bar not found' });
-    }
-
-    // Build query
-    let whereClauses = ['bar_id = ?', 'is_active = 1'];
-    let params = [barId];
-
-    if (upcoming === 'true') {
-      whereClauses.push('date >= CURDATE()');
-    }
-
-    if (category) {
-      const validCategories = ['live_music', 'trivia', 'happy_hour', 'sports', 'comedy'];
-      if (!validCategories.includes(category)) {
-        return res.status(400).json({ 
-          error: `Invalid category. Must be one of: ${validCategories.join(', ')}` 
-        });
-      }
-      whereClauses.push('category = ?');
-      params.push(category);
-    }
-
-    const selectSql = `
-      SELECT * FROM events 
-      WHERE ${whereClauses.join(' AND ')} 
-      ORDER BY date ASC, start_time ASC 
-      LIMIT ?
-    `;
-    params.push(parseInt(limit));
-
-    const [rows] = await db.query(selectSql, params);
-
-    return res.json({
-      success: true,
-      data: rows,
-      meta: {
-        bar: {
-          id: barRows[0].id,
-          name: barRows[0].name
-        },
-        count: rows.length,
-        filters: { upcoming, category, limit }
-      }
-    });
-  } catch (err) {
-    console.error('Error fetching bar events:', err.message || err);
-    return res.status(500).json({ error: 'Failed to fetch bar events' });
-  }
-}
-
-/**
- * GET /tags/:tagId/events
- * Returns all events assigned to a specific tag
- * Query parameters:
- * - upcoming: if 'true', only show future events
- * - limit: maximum number of results (default: 50)
- */
-async function getEventsByTag(req, res) {
-  try {
-    const tagId = req.params.tagId;
-    const { upcoming, limit = 50 } = req.query;
-
-    // Check if tag exists
-    const tagCheckSql = `SELECT id, name FROM event_tags WHERE id = ?`;
-    const [tagRows] = await db.execute(tagCheckSql, [tagId]);
-
-    if (!tagRows || tagRows.length === 0) {
-      return res.status(404).json({ error: 'Event tag not found' });
-    }
-
-    // Build query
-    let whereClauses = ['e.is_active = 1', 'b.is_active = 1', 'eta.tag_id = ?'];
-    let params = [tagId];
-
-    if (upcoming === 'true') {
-      whereClauses.push('e.date >= CURDATE()');
-    }
-
-    const selectSql = `
-      SELECT 
-        e.*, 
-        b.name as bar_name, 
-        b.address_city, 
-        b.address_state
-      FROM events e
-      INNER JOIN bars b ON e.bar_id = b.id
-      INNER JOIN event_tag_assignments eta ON e.id = eta.event_id
-      WHERE ${whereClauses.join(' AND ')} 
-      ORDER BY e.date ASC, e.start_time ASC 
-      LIMIT ?
-    `;
-    params.push(parseInt(limit));
-
-    const [rows] = await db.query(selectSql, params);
-
-    return res.json({
-      success: true,
-      data: rows,
-      meta: {
-        tag: {
-          id: tagRows[0].id,
-          name: tagRows[0].name
-        },
-        count: rows.length,
-        filters: { upcoming, limit }
-      }
-    });
-  } catch (err) {
-    console.error('Error fetching events by tag:', err.message || err);
-    return res.status(500).json({ error: 'Failed to fetch events by tag' });
-  }
-}
-
 module.exports = {
   createEvent,
-  getAllEvents,
+  getEventInstances,
   getEvent,
+  getEventInstance,
+  updateEventInstance,
+  getBarEvents,
   updateEvent,
   deleteEvent,
-  getBarEvents,
-  getEventsByTag
+  
+  // Legacy function names for backward compatibility (redirect to new functions)
+  getAllEvents: getEventInstances
 };
