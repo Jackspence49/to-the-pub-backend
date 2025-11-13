@@ -137,7 +137,7 @@ async function createEvent(req, res) {
 }
 
 /**
- * GET /events?bar_id=uuid&category=live_music&date_from=2024-01-01&date_to=2024-12-31&page=1&limit=20
+ * GET /events?bar_id=uuid&category=live_music&date_from=2024-01-01&date_to=2024-12-31&tag_ids=uuid1,uuid2&page=1&limit=20
  * Returns events with optional filtering
  * Query parameters:
  * - bar_id: filter by specific bar
@@ -145,6 +145,7 @@ async function createEvent(req, res) {
  * - date_from: filter events from this date (YYYY-MM-DD)
  * - date_to: filter events until this date (YYYY-MM-DD)
  * - upcoming: if 'true', only show future events
+ * - tag_ids: comma-separated list of tag IDs to filter by
  * - page: page number for pagination (default: 1)
  * - limit: maximum number of results per page (default: 20)
  */
@@ -156,6 +157,7 @@ async function getAllEvents(req, res) {
       date_from, 
       date_to, 
       upcoming, 
+      tag_ids,
       page = 1, 
       limit = 20 
     } = req.query;
@@ -179,11 +181,27 @@ async function getAllEvents(req, res) {
       }
     }
 
+    // Parse tag_ids if provided
+    let tagIdArray = [];
+    if (tag_ids) {
+      tagIdArray = tag_ids.split(',').map(id => id.trim()).filter(id => id.length > 0);
+    }
+
     // Build dynamic query
     let selectClauses = ['e.*', 'b.name as bar_name', 'b.address_city', 'b.address_state'];
     let joinClauses = ['INNER JOIN bars b ON e.bar_id = b.id'];
     let whereClauses = ['e.is_active = 1', 'b.is_active = 1'];
     let params = [];
+
+    // Add tag filtering with EXISTS subquery if tag_ids provided
+    if (tagIdArray.length > 0) {
+      const tagPlaceholders = tagIdArray.map(() => '?').join(',');
+      whereClauses.push(`EXISTS (
+        SELECT 1 FROM event_tag_assignments eta
+        WHERE eta.event_id = e.id AND eta.tag_id IN (${tagPlaceholders})
+      )`);
+      params.push(...tagIdArray);
+    }
 
     // Add filter conditions
     if (bar_id) {
@@ -244,7 +262,8 @@ async function getAllEvents(req, res) {
           category, 
           date_from, 
           date_to, 
-          upcoming 
+          upcoming,
+          tag_ids
         }
       }
     });
@@ -256,7 +275,7 @@ async function getAllEvents(req, res) {
 
 /**
  * GET /events/:id
- * Returns a single event by ID
+ * Returns a single event by ID with its tags
  */
 async function getEvent(req, res) {
   try {
@@ -284,6 +303,18 @@ async function getEvent(req, res) {
     }
 
     const event = rows[0];
+
+    // Get event tags
+    const tagsSql = `
+      SELECT et.id, et.name
+      FROM event_tags et
+      INNER JOIN event_tag_assignments eta ON et.id = eta.tag_id
+      WHERE eta.event_id = ?
+      ORDER BY et.name
+    `;
+    const [tagRows] = await db.query(tagsSql, [eventId]);
+    event.tags = tagRows;
+
     return res.json({ 
       success: true, 
       data: event
@@ -523,11 +554,75 @@ async function getBarEvents(req, res) {
   }
 }
 
+/**
+ * GET /tags/:tagId/events
+ * Returns all events assigned to a specific tag
+ * Query parameters:
+ * - upcoming: if 'true', only show future events
+ * - limit: maximum number of results (default: 50)
+ */
+async function getEventsByTag(req, res) {
+  try {
+    const tagId = req.params.tagId;
+    const { upcoming, limit = 50 } = req.query;
+
+    // Check if tag exists
+    const tagCheckSql = `SELECT id, name FROM event_tags WHERE id = ?`;
+    const [tagRows] = await db.execute(tagCheckSql, [tagId]);
+
+    if (!tagRows || tagRows.length === 0) {
+      return res.status(404).json({ error: 'Event tag not found' });
+    }
+
+    // Build query
+    let whereClauses = ['e.is_active = 1', 'b.is_active = 1', 'eta.tag_id = ?'];
+    let params = [tagId];
+
+    if (upcoming === 'true') {
+      whereClauses.push('e.date >= CURDATE()');
+    }
+
+    const selectSql = `
+      SELECT 
+        e.*, 
+        b.name as bar_name, 
+        b.address_city, 
+        b.address_state
+      FROM events e
+      INNER JOIN bars b ON e.bar_id = b.id
+      INNER JOIN event_tag_assignments eta ON e.id = eta.event_id
+      WHERE ${whereClauses.join(' AND ')} 
+      ORDER BY e.date ASC, e.start_time ASC 
+      LIMIT ?
+    `;
+    params.push(parseInt(limit));
+
+    const [rows] = await db.query(selectSql, params);
+
+    return res.json({
+      success: true,
+      data: rows,
+      meta: {
+        tag: {
+          id: tagRows[0].id,
+          name: tagRows[0].name
+        },
+        count: rows.length,
+        filters: { upcoming, limit }
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching events by tag:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch events by tag' });
+  }
+}
+
 module.exports = {
   createEvent,
   getAllEvents,
   getEvent,
   updateEvent,
   deleteEvent,
-  getBarEvents
+  getBarEvents,
+  getEventsByTag
 };

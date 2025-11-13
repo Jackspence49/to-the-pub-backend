@@ -7,6 +7,7 @@ require('../config/env');
 
 // Routes
 const tagsRouter = require('./routes/tags');
+const eventTagsRouter = require('./routes/event-tags');
 const barsRouter = require('./routes/bars');
 const usersRouter = require('./routes/users');
 const eventsRouter = require('./routes/events');
@@ -22,6 +23,8 @@ app.use(express.json());
 
 // mount tags routes at /tags
 app.use('/tags', tagsRouter);
+// mount event tags routes at /event-tags
+app.use('/event-tags', eventTagsRouter);
 // mount bars routes at /bars
 app.use('/bars', barsRouter);
 // mount users routes at /users
