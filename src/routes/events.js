@@ -13,12 +13,32 @@ const { authenticateToken } = require('../utils/auth');
 router.get('/', eventsController.getAllEvents);
 
 /**
+ * GET /events/instances
+ * Get event instances with optional filtering
+ * Query params: bar_id, date_from, date_to, upcoming, tag_ids, page, limit
+ */
+router.get('/instances', eventsController.getEventInstances);
+
+/**
+ * GET /events/instances/:instanceId
+ * Get a specific event instance by instance ID
+ */
+router.get('/instances/:instanceId', eventsController.getEventInstance);
+
+/**
  * GET /events/:id
  * Get a single event by ID (includes tags)
  */
 router.get('/:id', eventsController.getEvent);
 
 // Protected routes (authentication required)
+
+/**
+ * PUT /events/instances/:instanceId
+ * Update a specific event instance
+ * Requires JWT authentication
+ */
+router.put('/instances/:instanceId', authenticateToken, eventsController.updateEventInstance);
 
 /**
  * POST /events

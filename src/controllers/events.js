@@ -200,7 +200,7 @@ async function createEvent(req, res) {
 }
 
 /**
- * GET /events/instances?bar_id=uuid&tag_ids=uuid1,uuid2&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&page=1&limit=20
+ * GET /events/instances?bar_id=uuid&event_tag_id=uuid&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&page=1&limit=20
  * Returns event instances with optional filtering
  * This replaces the old getAllEvents function to work with the new schema
  */
@@ -211,7 +211,7 @@ async function getEventInstances(req, res) {
       date_from, 
       date_to, 
       upcoming, 
-      tag_ids,
+      event_tag_id,
       page = 1, 
       limit = 20 
     } = req.query;
@@ -225,55 +225,76 @@ async function getEventInstances(req, res) {
       return res.status(400).json({ error: 'date_to must be in YYYY-MM-DD format' });
     }
 
-    // Parse tag_ids if provided
-    let tagIdArray = [];
-    if (tag_ids) {
-      tagIdArray = tag_ids.split(',').map(id => id.trim()).filter(id => id.length > 0);
-    }
-
-    // Build dynamic query using the view for better performance
-    let baseView = upcoming === 'true' ? 'upcoming_event_instances' : 'all_event_instances';
-    let selectClauses = ['*'];
+    // Build dynamic query using direct joins instead of views to ensure all fields are included
+    let selectClauses = [
+      'ei.id as instance_id',
+      'ei.event_id', 
+      'ei.date',
+      'ei.is_cancelled',
+      'COALESCE(ei.custom_start_time, e.start_time) as start_time',
+      'COALESCE(ei.custom_end_time, e.end_time) as end_time',
+      'COALESCE(ei.crosses_midnight, e.crosses_midnight) as crosses_midnight',
+      'COALESCE(ei.custom_description, e.description) as description',
+      'COALESCE(ei.custom_image_url, e.image_url) as image_url',
+      'e.title',
+      'e.external_link',
+      'e.event_tag_id',
+      'e.bar_id',
+      'b.name as bar_name',
+      'b.address_street',
+      'b.address_city',
+      'b.address_state',
+      'b.address_zip',
+      'b.phone',
+      'b.website'
+    ];
+    
+    let fromClause = `
+      FROM event_instances ei
+      INNER JOIN events e ON ei.event_id = e.id
+      INNER JOIN bars b ON e.bar_id = b.id
+      WHERE e.is_active = 1 AND b.is_active = 1
+    `;
+    
     let whereClauses = [];
     let params = [];
 
-    // Add tag filtering if tag_ids provided
-    if (tagIdArray.length > 0) {
-      const tagPlaceholders = tagIdArray.map(() => '?').join(',');
-      whereClauses.push(`event_tag_id IN (${tagPlaceholders})`);
-      params.push(...tagIdArray);
+    // Simplify tag filtering to single event_tag_id
+    if (event_tag_id) {
+      whereClauses.push('e.event_tag_id = ?');
+      params.push(event_tag_id);
     }
 
     // Add filter conditions
     if (bar_id) {
-      whereClauses.push('bar_id = ?');
+      whereClauses.push('e.bar_id = ?');
       params.push(bar_id);
     }
 
     if (date_from) {
-      whereClauses.push('date >= ?');
+      whereClauses.push('ei.date >= ?');
       params.push(date_from);
     }
 
     if (date_to) {
-      whereClauses.push('date <= ?');
+      whereClauses.push('ei.date <= ?');
       params.push(date_to);
     }
 
-    // Only add CURDATE filter if not using upcoming view and upcoming is not explicitly set
-    if (upcoming === 'true' && baseView !== 'upcoming_event_instances') {
-      whereClauses.push('date >= CURDATE()');
+    // Add upcoming filter
+    if (upcoming === 'true') {
+      whereClauses.push('ei.date >= CURDATE()');
     }
 
     // Don't show cancelled instances
-    whereClauses.push('is_cancelled = false');
+    whereClauses.push('ei.is_cancelled = false');
 
     // Construct query
-    let selectSql = `SELECT ${selectClauses.join(', ')} FROM ${baseView}`;
+    let selectSql = `SELECT ${selectClauses.join(', ')} ${fromClause}`;
     if (whereClauses.length > 0) {
-      selectSql += ` WHERE ${whereClauses.join(' AND ')}`;
+      selectSql += ` AND ${whereClauses.join(' AND ')}`;
     }
-    selectSql += ` ORDER BY date ASC, start_time ASC`;
+    selectSql += ` ORDER BY ei.date ASC, start_time ASC`;
 
     // Add pagination
     const pageNum = parseInt(page);
@@ -285,9 +306,9 @@ async function getEventInstances(req, res) {
     const [rows] = await db.query(selectSql, params);
 
     // Get total count for pagination metadata
-    let countSql = `SELECT COUNT(*) as total FROM ${baseView}`;
+    let countSql = `SELECT COUNT(*) as total ${fromClause}`;
     if (whereClauses.length > 0) {
-      countSql += ` WHERE ${whereClauses.join(' AND ')}`;
+      countSql += ` AND ${whereClauses.join(' AND ')}`;
     }
     const [countRows] = await db.query(countSql, params.slice(0, -2)); // Remove limit and offset params
     const totalCount = countRows[0].total;
@@ -306,7 +327,7 @@ async function getEventInstances(req, res) {
           date_from, 
           date_to, 
           upcoming,
-          tag_ids
+          event_tag_id
         }
       }
     });
@@ -356,7 +377,7 @@ async function getEvent(req, res) {
       name: event.tag_name
     } : null;
     
-    // Clean up the flattened tag fields
+    // Clean up the flattened tag fields but keep event_tag_id in the main object
     delete event.tag_id;
     delete event.tag_name;
 
