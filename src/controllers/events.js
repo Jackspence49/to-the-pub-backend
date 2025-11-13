@@ -17,7 +17,7 @@ const {
  *   start_time: 'HH:MM:SS',
  *   end_time: 'HH:MM:SS',
  *   image_url: 'string', // optional
- *   category: 'live_music|trivia|happy_hour|sports|comedy',
+ *   tag_id: 'uuid', // event tag UUID from event_tags table
  *   external_link: 'string', // optional
  *   recurrence_pattern: 'none|daily|weekly|monthly', // default: 'none'
  *   recurrence_days: [0,1,2,3,4,5,6], // array of day numbers, required for weekly/monthly
@@ -30,9 +30,9 @@ async function createEvent(req, res) {
 
   // Basic validation
   if (!payload || !payload.bar_id || !payload.title || 
-      !payload.start_time || !payload.end_time || !payload.category) {
+      !payload.start_time || !payload.end_time || !payload.tag_id) {
     return res.status(400).json({ 
-      error: 'Missing required fields: bar_id, title, start_time, end_time, category' 
+      error: 'Missing required fields: bar_id, title, start_time, end_time, tag_id' 
     });
   }
 
@@ -46,11 +46,13 @@ async function createEvent(req, res) {
     });
   }
 
-  // Validate category
-  const validCategories = ['live_music', 'trivia', 'happy_hour', 'sports', 'comedy'];
-  if (!validCategories.includes(payload.category)) {
+  // Validate tag exists
+  const tagCheckSql = `SELECT id, name FROM event_tags WHERE id = ?`;
+  const [tagRows] = await db.execute(tagCheckSql, [payload.tag_id]);
+  
+  if (!tagRows || tagRows.length === 0) {
     return res.status(400).json({ 
-      error: `Invalid category. Must be one of: ${validCategories.join(', ')}` 
+      error: 'Invalid tag_id. Event tag not found.' 
     });
   }
 
@@ -62,10 +64,24 @@ async function createEvent(req, res) {
     });
   }
 
-  // Check that end_time is after start_time
-  if (payload.start_time >= payload.end_time) {
+  // Calculate if event crosses midnight
+  let crossesMidnight = false;
+  if (payload.start_time && payload.end_time) {
+    // Convert time strings to comparable format (HH:MM:SS)
+    const startTime = payload.start_time.split(':').map(Number);
+    const endTime = payload.end_time.split(':').map(Number);
+    
+    // Compare hours, then minutes if hours are equal
+    if (endTime[0] < startTime[0] || 
+        (endTime[0] === startTime[0] && endTime[1] < startTime[1])) {
+      crossesMidnight = true;
+    }
+  }
+  
+  // If not crossing midnight, validate that end_time is after start_time
+  if (!crossesMidnight && payload.start_time >= payload.end_time) {
     return res.status(400).json({ 
-      error: 'End time must be after start time' 
+      error: 'End time must be after start time (unless event crosses midnight)' 
     });
   }
 
@@ -112,8 +128,8 @@ async function createEvent(req, res) {
     const eventId = uuidv4();
     const insertEventSql = `
       INSERT INTO events (
-        id, bar_id, title, description, start_time, end_time, 
-        image_url, category, external_link, recurrence_pattern, 
+        id, bar_id, title, description, start_time, end_time, crosses_midnight,
+        image_url, external_link, recurrence_pattern, 
         recurrence_days, recurrence_start_date, recurrence_end_date, is_active
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
@@ -125,13 +141,13 @@ async function createEvent(req, res) {
       payload.description || null,
       payload.start_time,
       payload.end_time,
+      crossesMidnight ? 1 : 0,
       payload.image_url || null,
-      payload.category,
       payload.external_link || null,
       recurrencePattern,
       recurrencePattern !== 'none' ? JSON.stringify(payload.recurrence_days || []) : null,
       payload.recurrence_start_date,
-      payload.recurrence_end_date || payload.recurrence_start_date, // For one-time events, end = start
+      payload.recurrence_end_date || payload.recurrence_start_date,
       1
     ];
     
@@ -150,15 +166,20 @@ async function createEvent(req, res) {
     
     if (instances.length > 0) {
       const insertInstanceSql = `
-        INSERT INTO event_instances (id, event_id, date) 
-        VALUES (?, ?, ?)
+        INSERT INTO event_instances (id, event_id, date, crosses_midnight) 
+        VALUES (?, ?, ?, ?)
       `;
       
       for (const instance of instances) {
         const instanceId = uuidv4();
-        await conn.execute(insertInstanceSql, [instanceId, instance.event_id, instance.date]);
+        // Event instances inherit crosses_midnight from master event by default
+        await conn.execute(insertInstanceSql, [instanceId, instance.event_id, instance.date, crossesMidnight ? 1 : 0]);
       }
     }
+
+    // Create event-tag assignment
+    const tagAssignmentSql = `INSERT INTO event_tag_assignments (event_id, tag_id) VALUES (?, ?)`;
+    await conn.execute(tagAssignmentSql, [eventId, payload.tag_id]);
 
     await conn.commit();
 
@@ -182,7 +203,7 @@ async function createEvent(req, res) {
 }
 
 /**
- * GET /events/instances?bar_id=uuid&category=live_music&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&page=1&limit=20
+ * GET /events/instances?bar_id=uuid&tag_ids=uuid1,uuid2&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&page=1&limit=20
  * Returns event instances with optional filtering
  * This replaces the old getAllEvents function to work with the new schema
  */
@@ -190,7 +211,6 @@ async function getEventInstances(req, res) {
   try {
     const { 
       bar_id, 
-      category, 
       date_from, 
       date_to, 
       upcoming, 
@@ -206,16 +226,6 @@ async function getEventInstances(req, res) {
     }
     if (date_to && !dateRegex.test(date_to)) {
       return res.status(400).json({ error: 'date_to must be in YYYY-MM-DD format' });
-    }
-
-    // Validate category if provided
-    if (category) {
-      const validCategories = ['live_music', 'trivia', 'happy_hour', 'sports', 'comedy'];
-      if (!validCategories.includes(category)) {
-        return res.status(400).json({ 
-          error: `Invalid category. Must be one of: ${validCategories.join(', ')}` 
-        });
-      }
     }
 
     // Parse tag_ids if provided
@@ -244,11 +254,6 @@ async function getEventInstances(req, res) {
     if (bar_id) {
       whereClauses.push('bar_id = ?');
       params.push(bar_id);
-    }
-
-    if (category) {
-      whereClauses.push('category = ?');
-      params.push(category);
     }
 
     if (date_from) {
@@ -304,7 +309,6 @@ async function getEventInstances(req, res) {
         total_pages: Math.ceil(totalCount / limitNum),
         filters: { 
           bar_id, 
-          category, 
           date_from, 
           date_to, 
           upcoming,
@@ -484,7 +488,47 @@ async function updateEventInstance(req, res) {
           error: 'custom_end_time must be in HH:MM:SS format' 
         });
       }
+      
+      // If both custom times provided, validate they make sense (allow midnight crossing)
+      if (payload.custom_start_time && payload.custom_end_time) {
+        const startTime = payload.custom_start_time.split(':').map(Number);
+        const endTime = payload.custom_end_time.split(':').map(Number);
+        
+        const crossesMidnight = endTime[0] < startTime[0] || 
+                               (endTime[0] === startTime[0] && endTime[1] < startTime[1]);
+        
+        // Just log that this is a midnight-crossing event, don't prevent it
+        if (crossesMidnight) {
+          console.log(`Event instance ${instanceId} has custom times that cross midnight: ${payload.custom_start_time} - ${payload.custom_end_time}`);
+        }
+      }
     }
+
+    // Calculate crosses_midnight for this instance
+    let instanceCrossesMidnight = null;
+    
+    if (payload.custom_start_time && payload.custom_end_time) {
+      // Both custom times provided - calculate based on custom times
+      const startTime = payload.custom_start_time.split(':').map(Number);
+      const endTime = payload.custom_end_time.split(':').map(Number);
+      instanceCrossesMidnight = endTime[0] < startTime[0] || 
+                               (endTime[0] === startTime[0] && endTime[1] < startTime[1]);
+    } else if (payload.custom_start_time || payload.custom_end_time) {
+      // Only one custom time provided - need to get the other from master event
+      const [masterEventRows] = await db.execute(
+        'SELECT start_time, end_time, crosses_midnight FROM events WHERE id = (SELECT event_id FROM event_instances WHERE id = ?)',
+        [instanceId]
+      );
+      
+      if (masterEventRows.length > 0) {
+        const masterEvent = masterEventRows[0];
+        const startTime = (payload.custom_start_time || masterEvent.start_time).split(':').map(Number);
+        const endTime = (payload.custom_end_time || masterEvent.end_time).split(':').map(Number);
+        instanceCrossesMidnight = endTime[0] < startTime[0] || 
+                                 (endTime[0] === startTime[0] && endTime[1] < startTime[1]);
+      }
+    }
+    // If no custom times provided, crosses_midnight will remain unchanged (inherited from master event)
 
     // Update instance
     const updateSql = `
@@ -494,6 +538,7 @@ async function updateEventInstance(req, res) {
         custom_end_time = ?,
         custom_description = ?,
         custom_image_url = ?,
+        crosses_midnight = COALESCE(?, crosses_midnight),
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `;
@@ -504,6 +549,7 @@ async function updateEventInstance(req, res) {
       payload.custom_end_time || null,
       payload.custom_description || null,
       payload.custom_image_url || null,
+      instanceCrossesMidnight,
       instanceId
     ]);
 
@@ -620,6 +666,20 @@ async function updateEvent(req, res) {
         });
       }
     }
+    
+    // If both times provided, calculate crosses_midnight
+    let crossesMidnight = null;
+    if (payload.start_time && payload.end_time) {
+      const startTime = payload.start_time.split(':').map(Number);
+      const endTime = payload.end_time.split(':').map(Number);
+      
+      if (endTime[0] < startTime[0] || 
+          (endTime[0] === startTime[0] && endTime[1] < startTime[1])) {
+        crossesMidnight = true;
+      } else {
+        crossesMidnight = false;
+      }
+    }
 
     // Update event
     const updateSql = `
@@ -628,6 +688,7 @@ async function updateEvent(req, res) {
         description = COALESCE(?, description),
         start_time = COALESCE(?, start_time),
         end_time = COALESCE(?, end_time),
+        crosses_midnight = COALESCE(?, crosses_midnight),
         category = COALESCE(?, category),
         external_link = ?,
         image_url = ?,
@@ -640,6 +701,7 @@ async function updateEvent(req, res) {
       payload.description,
       payload.start_time,
       payload.end_time,
+      crossesMidnight,
       payload.category,
       payload.external_link || null,
       payload.image_url || null,

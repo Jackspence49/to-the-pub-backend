@@ -14,7 +14,8 @@ events:
 - title (string) - Event title
 - description (text) - Event description (optional)
 - start_time (TIME) - Default start time (HH:MM:SS)
-- end_time (TIME) - Default end time (HH:MM:SS) 
+- end_time (TIME) - Default end time (HH:MM:SS)
+- crosses_midnight (boolean) - Whether event times cross midnight (auto-calculated)
 - image_url (string) - Default image URL (optional)
 - category (enum) - Event category: 'live_music', 'trivia', 'happy_hour', 'sports', 'comedy'
 - external_link (string) - External link (optional)
@@ -66,6 +67,8 @@ Creates a master event and generates instances based on recurrence pattern.
   "recurrence_end_date": "YYYY-MM-DD" // required for recurring events
 }
 ```
+
+**Note:** Events can cross midnight (e.g., start_time: "23:30:00", end_time: "02:00:00"). The system automatically calculates and stores a `crosses_midnight` field when the end time is earlier than the start time.
 
 **Examples:**
 
