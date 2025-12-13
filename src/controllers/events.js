@@ -38,12 +38,29 @@ async function createEvent(req, res) {
 
   // Set default recurrence pattern
   const recurrencePattern = payload.recurrence_pattern || 'none';
-  
+
+  // Validate recurrence_pattern
+  const validPatterns = ['none', 'daily', 'weekly', 'monthly', 'yearly'];
+  if (!validPatterns.includes(recurrencePattern)) {
+    return res.status(400).json({
+      error: `recurrence_pattern must be one of: ${validPatterns.join(', ')}`
+    });
+  }
+
   // For non-recurring events, require recurrence_start_date as the event date
   if (recurrencePattern === 'none' && !payload.recurrence_start_date) {
     return res.status(400).json({ 
       error: 'recurrence_start_date is required (use as event date for one-time events)' 
     });
+  }
+
+  // For recurring events (including yearly), require start date and either end date or occurrence count
+  if (recurrencePattern !== 'none') {
+    if (!payload.recurrence_start_date || (!payload.recurrence_end_date && !payload.recurrence_end_occurrences)) {
+      return res.status(400).json({
+        error: 'recurrence_start_date and either recurrence_end_date or recurrence_end_occurrences are required for recurring events (including yearly)'
+      });
+    }
   }
 
   // Validate tag exists
@@ -90,9 +107,10 @@ async function createEvent(req, res) {
     recurrence_pattern: recurrencePattern,
     recurrence_days: payload.recurrence_days,
     recurrence_start_date: payload.recurrence_start_date,
-    recurrence_end_date: payload.recurrence_end_date
+    recurrence_end_date: payload.recurrence_end_date,
+    recurrence_end_occurrences: payload.recurrence_end_occurrences
   };
-  
+
   const validation = validateRecurrenceData(recurrenceData);
   if (!validation.isValid) {
     return res.status(400).json({ 
@@ -160,7 +178,8 @@ async function createEvent(req, res) {
       recurrence_pattern: recurrencePattern,
       recurrence_days: payload.recurrence_days,
       recurrence_start_date: payload.recurrence_start_date,
-      recurrence_end_date: payload.recurrence_end_date || payload.recurrence_start_date
+      recurrence_end_date: payload.recurrence_end_date || payload.recurrence_start_date,
+      recurrence_end_occurrences: payload.recurrence_end_occurrences
     };
 
     const instances = generateEventInstances(eventForGeneration);
@@ -668,7 +687,8 @@ async function updateEvent(req, res) {
       recurrence_days: payload.recurrence_days !== undefined ? payload.recurrence_days : 
                       (currentEvent.recurrence_days ? JSON.parse(currentEvent.recurrence_days) : null),
       recurrence_start_date: payload.recurrence_start_date || currentEvent.recurrence_start_date,
-      recurrence_end_date: payload.recurrence_end_date || currentEvent.recurrence_end_date
+      recurrence_end_date: payload.recurrence_end_date || currentEvent.recurrence_end_date,
+      recurrence_end_occurrences: payload.recurrence_end_occurrences
     };
 
     const validation = validateRecurrenceData(updatedRecurrenceData);
@@ -684,7 +704,8 @@ async function updateEvent(req, res) {
       payload.recurrence_pattern !== undefined ||
       payload.recurrence_days !== undefined ||
       payload.recurrence_start_date !== undefined ||
-      payload.recurrence_end_date !== undefined;
+      payload.recurrence_end_date !== undefined ||
+      payload.recurrence_end_occurrences !== undefined;
 
     // If both times provided, calculate crosses_midnight
     let crossesMidnight = null;
@@ -768,7 +789,8 @@ async function updateEvent(req, res) {
           recurrence_pattern: updatedRecurrenceData.recurrence_pattern,
           recurrence_days: updatedRecurrenceData.recurrence_days,
           recurrence_start_date: updatedRecurrenceData.recurrence_start_date,
-          recurrence_end_date: updatedRecurrenceData.recurrence_end_date
+          recurrence_end_date: updatedRecurrenceData.recurrence_end_date,
+          recurrence_end_occurrences: updatedRecurrenceData.recurrence_end_occurrences
         };
 
         const instances = generateEventInstances(eventForGeneration);

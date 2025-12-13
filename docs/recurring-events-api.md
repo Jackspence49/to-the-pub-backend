@@ -60,14 +60,16 @@ Creates a master event and generates instances based on recurrence pattern.
   "image_url": "string", // optional
   "event_tag_id": "uuid", // event tag UUID from event_tags table
   "external_link": "string", // optional
-  "recurrence_pattern": "none|daily|weekly|monthly", // default: "none"
+  "recurrence_pattern": "none|daily|weekly|monthly|yearly", // default: "none"
   "recurrence_days": [0,1,2,3,4,5,6], // required for weekly only
   "recurrence_start_date": "YYYY-MM-DD", // required (event date for one-time events)
-  "recurrence_end_date": "YYYY-MM-DD" // required for recurring events
+  "recurrence_end_date": "YYYY-MM-DD", // required for recurring events unless recurrence_end_occurrences is used
+  "recurrence_end_occurrences": 10 // optional, alternative to recurrence_end_date for recurring events
 }
 ```
 
 **Note:** Events can cross midnight (e.g., start_time: "23:30:00", end_time: "02:00:00"). The system automatically calculates and stores a `crosses_midnight` field when the end time is earlier than the start time.
+
 
 **Examples:**
 
@@ -85,7 +87,8 @@ One-time event:
 }
 ```
 
-Weekly recurring event:
+
+Weekly recurring event (ends after a date):
 ```json
 {
   "bar_id": "123e4567-e89b-12d3-a456-426614174000", 
@@ -97,6 +100,35 @@ Weekly recurring event:
   "recurrence_days": [3], // Wednesday (0=Sunday, 3=Wednesday)
   "recurrence_start_date": "2024-01-01",
   "recurrence_end_date": "2024-12-31"
+}
+```
+
+Weekly recurring event (ends after N occurrences):
+```json
+{
+  "bar_id": "123e4567-e89b-12d3-a456-426614174000", 
+  "title": "Trivia Night",
+  "start_time": "19:00:00",
+  "end_time": "21:00:00",
+  "event_tag_id": "789e0123-e89b-12d3-a456-426614174002",
+  "recurrence_pattern": "weekly",
+  "recurrence_days": [3], // Wednesday (0=Sunday, 3=Wednesday)
+  "recurrence_start_date": "2024-01-01",
+  "recurrence_end_occurrences": 10
+}
+```
+
+Yearly recurring event (ends after 5 years):
+```json
+{
+  "bar_id": "123e4567-e89b-12d3-a456-426614174000", 
+  "title": "Annual Beer Festival",
+  "start_time": "12:00:00",
+  "end_time": "23:00:00",
+  "event_tag_id": "789e0123-e89b-12d3-a456-426614174002",
+  "recurrence_pattern": "yearly",
+  "recurrence_start_date": "2025-06-01",
+  "recurrence_end_occurrences": 5
 }
 ```
 
@@ -254,20 +286,26 @@ ORDER BY date ASC;
 - `recurrence_end_date`: Same as start date
 - `recurrence_days`: null
 
+
 ### Daily
 - `recurrence_pattern`: "daily" 
-- Creates instance every day between start and end dates
+- Creates instance every day between start and end date, or for the specified number of occurrences
 - `recurrence_days`: ignored
 
 ### Weekly
 - `recurrence_pattern`: "weekly"
 - `recurrence_days`: Array of weekdays [0-6] where 0=Sunday
-- Creates instances on specified days each week
+- Creates instances on specified days each week, until end date or for the specified number of occurrences
 
 ### Monthly  
 - `recurrence_pattern`: "monthly"
 - `recurrence_days`: ignored (not required)
-- Creates instances on the same day of month as the start date
+- Creates instances on the same day of month as the start date, until end date or for the specified number of occurrences
+
+### Yearly
+- `recurrence_pattern`: "yearly"
+- `recurrence_days`: ignored (not required)
+- Creates instances on the same month and day as the start date, until end date or for the specified number of occurrences
 
 ## Benefits
 
