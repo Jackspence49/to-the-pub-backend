@@ -95,8 +95,9 @@ CREATE TABLE events (
     -- Recurrence fields
     recurrence_pattern ENUM('none', 'daily', 'weekly', 'monthly') DEFAULT 'none',
     recurrence_days JSON,
-    recurrence_start_date DATE,
+    start_date DATE,
     recurrence_end_date DATE,
+    recurrence_end_occurrences INT NULL,
     
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -108,7 +109,7 @@ CREATE TABLE events (
     INDEX idx_events_event_tag_id (event_tag_id),
     INDEX idx_events_active (is_active),
     INDEX idx_events_pattern (recurrence_pattern),
-    INDEX idx_events_recurrence_dates (recurrence_start_date, recurrence_end_date)
+    INDEX idx_events_recurrence_dates (start_date, recurrence_end_date)
 );
 
 -- Event instances table (specific occurrences)

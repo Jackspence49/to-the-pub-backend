@@ -20,8 +20,9 @@ events:
 - external_link (string) - External link (optional)
 - recurrence_pattern (enum) - 'none', 'daily', 'weekly', 'monthly'
 - recurrence_days (JSON) - Array of day numbers [0,1,2,3,4,5,6] where 0=Sunday
-- recurrence_start_date (DATE) - Start date for recurrence or single event date
+- start_date (DATE) - Start date for recurrence or single event date
 - recurrence_end_date (DATE) - End date for recurrence
+- recurrence_end_occurrences (INT) - Optional limit when no end date is provided
 - is_active (boolean) - Soft delete flag
 - created_at, updated_at (timestamps)
 ```
@@ -62,7 +63,7 @@ Creates a master event and generates instances based on recurrence pattern.
   "external_link": "string", // optional
   "recurrence_pattern": "none|daily|weekly|monthly|yearly", // default: "none"
   "recurrence_days": [0,1,2,3,4,5,6], // required for weekly only
-  "recurrence_start_date": "YYYY-MM-DD", // required (event date for one-time events)
+  "start_date": "YYYY-MM-DD", // required (event date for one-time events)
   "recurrence_end_date": "YYYY-MM-DD", // required for recurring events unless recurrence_end_occurrences is used
   "recurrence_end_occurrences": 10 // optional, alternative to recurrence_end_date for recurring events
 }
@@ -83,7 +84,7 @@ One-time event:
   "end_time": "23:00:00",
   "event_tag_id": "456e7890-e89b-12d3-a456-426614174001",
   "recurrence_pattern": "none",
-  "recurrence_start_date": "2024-12-15"
+  "start_date": "2024-12-15"
 }
 ```
 
@@ -98,7 +99,7 @@ Weekly recurring event (ends after a date):
   "event_tag_id": "789e0123-e89b-12d3-a456-426614174002",
   "recurrence_pattern": "weekly",
   "recurrence_days": [3], // Wednesday (0=Sunday, 3=Wednesday)
-  "recurrence_start_date": "2024-01-01",
+  "start_date": "2024-01-01",
   "recurrence_end_date": "2024-12-31"
 }
 ```
@@ -113,7 +114,7 @@ Weekly recurring event (ends after N occurrences):
   "event_tag_id": "789e0123-e89b-12d3-a456-426614174002",
   "recurrence_pattern": "weekly",
   "recurrence_days": [3], // Wednesday (0=Sunday, 3=Wednesday)
-  "recurrence_start_date": "2024-01-01",
+  "start_date": "2024-01-01",
   "recurrence_end_occurrences": 10
 }
 ```
@@ -127,7 +128,7 @@ Yearly recurring event (ends after 5 years):
   "end_time": "23:00:00",
   "event_tag_id": "789e0123-e89b-12d3-a456-426614174002",
   "recurrence_pattern": "yearly",
-  "recurrence_start_date": "2025-06-01",
+  "start_date": "2025-06-01",
   "recurrence_end_occurrences": 5
 }
 ```
@@ -196,7 +197,7 @@ Returns a master event with recurrence info and upcoming instances.
     "end_time": "21:00:00",
     "recurrence_pattern": "weekly",
     "recurrence_days": [3],
-    "recurrence_start_date": "2024-01-01", 
+    "start_date": "2024-01-01", 
     "recurrence_end_date": "2024-12-31",
     "recurrence_description": "Weekly on Wednesday",
     "bar_name": "The Local Pub",
@@ -234,6 +235,23 @@ Updates a specific event instance, allowing customization.
   "custom_image_url": "special-image-url" // optional override
 }
 ```
+
+### Update Master Event  
+`PUT /events/:id`
+
+Allows editing of the master event itself. When the master is updated, all upcoming instances for that event inherit the new values (unless they have custom overrides, which are cleared for the affected fields).
+
+**Request Body (use any of these as needed):**
+- `title`, `description`, `event_tag_id`, `external_link`
+- `start_time`, `end_time`, `start_date`, `recurrence_pattern`, `recurrence_days`, `recurrence_end_date`, `recurrence_end_occurrences`
+- `image_url` (provide a new URL) or `remove_image_url: true` to clear the image
+- `cancel_all_instances: true|false` to cancel/reactivate the master event and all future instances
+- `regenerate_instances: true` to delete all future instances and rebuild them from the latest recurrence settings
+
+**Behavior:**
+- Updates to start/end time, description, or image clear any per-instance overrides so every upcoming occurrence reflects the new master data.
+- Changing recurrence data (or sending `regenerate_instances: true`) deletes all future instances and recreates them to match the latest rules.
+- Setting `cancel_all_instances: true` marks the master event inactive and cancels all upcoming instances. Sending `false` reactivates them.
 
 ### Get Bar Events
 `GET /bars/:barId/events`
@@ -282,7 +300,7 @@ ORDER BY date ASC;
 
 ### None (One-time Events)
 - `recurrence_pattern`: "none"
-- `recurrence_start_date`: Event date
+- `start_date`: Event date
 - `recurrence_end_date`: Same as start date
 - `recurrence_days`: null
 

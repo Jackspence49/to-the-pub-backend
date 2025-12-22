@@ -67,8 +67,8 @@ async function testEventTagIdFunctionality() {
     const insertEventSql = `
       INSERT INTO events (
         id, bar_id, title, description, start_time, end_time, event_tag_id,
-        external_link, recurrence_pattern, recurrence_start_date, recurrence_end_date, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        external_link, recurrence_pattern, start_date, recurrence_end_date, recurrence_end_occurrences, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
     await db.execute(insertEventSql, [
@@ -83,6 +83,7 @@ async function testEventTagIdFunctionality() {
       'none',
       '2025-01-01',
       '2025-01-01',
+      null,
       1
     ]);
     

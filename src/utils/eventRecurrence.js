@@ -2,15 +2,7 @@
  * Utility functions for handling recurring events and event instances
  */
 
- * Generate event instances for a recurring event
- * @param {Object} event - The master event object
- * @param {string} event.id - Event ID
- * @param {string} event.recurrence_pattern - 'none', 'daily', 'weekly', 'monthly'
- * @param {Array} event.recurrence_days - Array of day numbers [0-6] where 0=Sunday (required for weekly only)
- * @param {string} event.recurrence_start_date - Start date (YYYY-MM-DD)
- * @param {string} event.recurrence_end_date - End date (YYYY-MM-DD)
- * @returns {Array} Array of instance objects to be inserted
- */
+
 
 /**
  * Generate event instances for a recurring event, supporting end date or occurrence count
@@ -18,7 +10,7 @@
  * @param {string} event.id - Event ID
  * @param {string} event.recurrence_pattern - 'none', 'daily', 'weekly', 'monthly', 'yearly'
  * @param {Array} event.recurrence_days - Array of day numbers [0-6] where 0=Sunday (required for weekly only)
- * @param {string} event.recurrence_start_date - Start date (YYYY-MM-DD)
+ * @param {string} event.start_date - Start date (YYYY-MM-DD)
  * @param {string} event.recurrence_end_date - End date (YYYY-MM-DD, optional if occurrence count is used)
  * @param {number} event.recurrence_end_occurrences - Number of occurrences (optional, alternative to end date)
  * @returns {Array} Array of instance objects to be inserted
@@ -28,12 +20,12 @@ function generateEventInstances(event) {
     // For non-recurring events, create a single instance for the start date
     return [{
       event_id: event.id,
-      date: event.recurrence_start_date
+      date: event.start_date
     }];
   }
 
   const instances = [];
-  const startDate = new Date(event.recurrence_start_date + 'T00:00:00');
+  const startDate = new Date(event.start_date + 'T00:00:00');
   const endDate = event.recurrence_end_date ? new Date(event.recurrence_end_date + 'T00:00:00') : null;
   const maxOccurrences = event.recurrence_end_occurrences ? parseInt(event.recurrence_end_occurrences, 10) : null;
   const currentDate = new Date(startDate);
@@ -113,7 +105,7 @@ function formatDateForDB(date) {
  * @returns {Object} Validation result with isValid and errors
  */
 function validateRecurrenceData(recurrenceData) {
-  const { recurrence_pattern, recurrence_days, recurrence_start_date, recurrence_end_date, recurrence_end_occurrences } = recurrenceData;
+  const { recurrence_pattern, recurrence_days, start_date, recurrence_end_date, recurrence_end_occurrences } = recurrenceData;
   const errors = [];
 
   // Valid patterns
@@ -124,8 +116,8 @@ function validateRecurrenceData(recurrenceData) {
 
   // For recurring events, start date is required, and either end date or occurrence count is required
   if (recurrence_pattern !== 'none') {
-    if (!recurrence_start_date) {
-      errors.push('recurrence_start_date is required for recurring events');
+    if (!start_date) {
+      errors.push('start_date is required for recurring events');
     }
     if (!recurrence_end_date && !recurrence_end_occurrences) {
       errors.push('Either recurrence_end_date or recurrence_end_occurrences is required for recurring events');
@@ -133,17 +125,17 @@ function validateRecurrenceData(recurrenceData) {
 
     // Validate date formats
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (recurrence_start_date && !dateRegex.test(recurrence_start_date)) {
-      errors.push('recurrence_start_date must be in YYYY-MM-DD format');
+    if (start_date && !dateRegex.test(start_date)) {
+      errors.push('start_date must be in YYYY-MM-DD format');
     }
     if (recurrence_end_date && !dateRegex.test(recurrence_end_date)) {
       errors.push('recurrence_end_date must be in YYYY-MM-DD format');
     }
 
     // Check that end date is after start date if both provided
-    if (recurrence_start_date && recurrence_end_date) {
-      if (new Date(recurrence_end_date) <= new Date(recurrence_start_date)) {
-        errors.push('recurrence_end_date must be after recurrence_start_date');
+    if (start_date && recurrence_end_date) {
+      if (new Date(recurrence_end_date) <= new Date(start_date)) {
+        errors.push('recurrence_end_date must be after start_date');
       }
     }
 
