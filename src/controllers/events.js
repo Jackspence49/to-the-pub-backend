@@ -256,9 +256,9 @@ async function getEventInstances(req, res) {
       'COALESCE(ei.crosses_midnight, e.crosses_midnight) as crosses_midnight',
       'COALESCE(ei.custom_description, e.description) as description',
       'COALESCE(ei.custom_image_url, e.image_url) as image_url',
-      'e.title',
-      'e.external_link',
-      'e.event_tag_id',
+      'COALESCE(ei.custom_title, e.title) as title',
+      'COALESCE(ei.custom_external_link, e.external_link) as external_link',
+      'COALESCE(ei.custom_event_tag_id, e.event_tag_id) as event_tag_id',
       'e.bar_id',
       'b.name as bar_name',
       'b.address_street',
@@ -281,7 +281,7 @@ async function getEventInstances(req, res) {
 
     // Simplify tag filtering to single event_tag_id
     if (event_tag_id) {
-      whereClauses.push('e.event_tag_id = ?');
+      whereClauses.push('COALESCE(ei.custom_event_tag_id, e.event_tag_id) = ?');
       params.push(event_tag_id);
     }
 
@@ -404,7 +404,8 @@ async function getEvent(req, res) {
     // Get upcoming instances (next 10)
     const instancesSql = `
       SELECT id as instance_id, date, is_cancelled, 
-             custom_start_time, custom_end_time, custom_description, custom_image_url
+             custom_start_time, custom_end_time, custom_description, custom_image_url,
+             custom_title, custom_event_tag_id, custom_external_link
       FROM event_instances 
       WHERE event_id = ? AND date >= CURDATE() 
       ORDER BY date ASC 
@@ -444,10 +445,17 @@ async function getEventInstance(req, res) {
         COALESCE(ei.custom_end_time, e.end_time) as end_time,
         COALESCE(ei.custom_description, e.description) as description,
         COALESCE(ei.custom_image_url, e.image_url) as image_url,
-        e.title,
-        e.external_link,
-        et.id as tag_id,
-        et.name as tag_name,
+        COALESCE(ei.custom_title, e.title) as title,
+        COALESCE(ei.custom_external_link, e.external_link) as external_link,
+        COALESCE(ei.custom_event_tag_id, e.event_tag_id) as tag_id,
+        COALESCE(ct.name, et.name) as tag_name,
+        ei.custom_start_time,
+        ei.custom_end_time,
+        ei.custom_description,
+        ei.custom_image_url,
+        ei.custom_title,
+        ei.custom_event_tag_id,
+        ei.custom_external_link,
         e.recurrence_pattern,
         b.name as bar_name,
         b.address_street,
@@ -460,6 +468,7 @@ async function getEventInstance(req, res) {
       INNER JOIN events e ON ei.event_id = e.id
       INNER JOIN bars b ON e.bar_id = b.id
       LEFT JOIN event_tags et ON e.event_tag_id = et.id
+      LEFT JOIN event_tags ct ON ei.custom_event_tag_id = ct.id
       WHERE ei.id = ? AND e.is_active = 1 AND b.is_active = 1
     `;
 
@@ -500,9 +509,15 @@ async function updateEventInstance(req, res) {
     const instanceId = req.params.instanceId;
     const payload = req.body;
 
-    // Check if instance exists
+    // Check if instance exists and gather current values
     const checkSql = `
-      SELECT ei.id, ei.event_id, e.title 
+      SELECT 
+        ei.id, 
+        ei.event_id, 
+        ei.custom_start_time, 
+        ei.custom_end_time,
+        e.start_time as master_start_time,
+        e.end_time as master_end_time
       FROM event_instances ei
       INNER JOIN events e ON ei.event_id = e.id
       WHERE ei.id = ? AND e.is_active = 1
@@ -513,83 +528,171 @@ async function updateEventInstance(req, res) {
       return res.status(404).json({ error: 'Event instance not found' });
     }
 
-    // Validate time format if provided
-    if (payload.custom_start_time || payload.custom_end_time) {
-      const timeRegex = /^([01]?\d|2[0-3]):[0-5]\d:[0-5]\d$/;
-      if (payload.custom_start_time && !timeRegex.test(payload.custom_start_time)) {
-        return res.status(400).json({ 
-          error: 'custom_start_time must be in HH:MM:SS format' 
-        });
+    const instanceMeta = checkRows[0];
+    const updates = [];
+    const params = [];
+    const appendUpdate = (clause, value) => {
+      updates.push(clause);
+      params.push(value);
+    };
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (payload.date !== undefined) {
+      if (!payload.date || !dateRegex.test(payload.date)) {
+        return res.status(400).json({ error: 'date must be provided in YYYY-MM-DD format' });
       }
-      if (payload.custom_end_time && !timeRegex.test(payload.custom_end_time)) {
-        return res.status(400).json({ 
-          error: 'custom_end_time must be in HH:MM:SS format' 
-        });
-      }
-      
-      // If both custom times provided, validate they make sense (allow midnight crossing)
-      if (payload.custom_start_time && payload.custom_end_time) {
-        const startTime = payload.custom_start_time.split(':').map(Number);
-        const endTime = payload.custom_end_time.split(':').map(Number);
-        
-        const crossesMidnight = endTime[0] < startTime[0] || 
-                               (endTime[0] === startTime[0] && endTime[1] < startTime[1]);
-        
-        // Just log that this is a midnight-crossing event, don't prevent it
-        if (crossesMidnight) {
-          console.log(`Event instance ${instanceId} has custom times that cross midnight: ${payload.custom_start_time} - ${payload.custom_end_time}`);
-        }
-      }
+      appendUpdate('date = ?', payload.date);
     }
 
-    // Calculate crosses_midnight for this instance
+    if (payload.is_cancelled !== undefined) {
+      let boolValue;
+      if (typeof payload.is_cancelled === 'string') {
+        const lowered = payload.is_cancelled.toLowerCase();
+        if (lowered === 'true') {
+          boolValue = true;
+        } else if (lowered === 'false') {
+          boolValue = false;
+        } else {
+          return res.status(400).json({ error: 'is_cancelled must be a boolean value' });
+        }
+      } else {
+        boolValue = payload.is_cancelled === true || payload.is_cancelled === 1;
+      }
+      appendUpdate('is_cancelled = ?', boolValue ? 1 : 0);
+    }
+
+    const timeRegex = /^([01]?\d|2[0-3]):[0-5]\d:[0-5]\d$/;
+    let normalizedCustomStartTime;
+    let normalizedCustomEndTime;
+
+    if (payload.custom_start_time !== undefined) {
+      if (!payload.custom_start_time) {
+        normalizedCustomStartTime = null;
+      } else {
+        if (!timeRegex.test(payload.custom_start_time)) {
+          return res.status(400).json({ error: 'custom_start_time must be in HH:MM:SS format' });
+        }
+        normalizedCustomStartTime = payload.custom_start_time;
+      }
+      appendUpdate('custom_start_time = ?', normalizedCustomStartTime);
+    }
+
+    if (payload.custom_end_time !== undefined) {
+      if (!payload.custom_end_time) {
+        normalizedCustomEndTime = null;
+      } else {
+        if (!timeRegex.test(payload.custom_end_time)) {
+          return res.status(400).json({ error: 'custom_end_time must be in HH:MM:SS format' });
+        }
+        normalizedCustomEndTime = payload.custom_end_time;
+      }
+      appendUpdate('custom_end_time = ?', normalizedCustomEndTime);
+    }
+
+    const normalizeEmptyToNull = (value) => {
+      if (value === undefined) {
+        return undefined;
+      }
+      if (value === null || value === '') {
+        return null;
+      }
+      return value;
+    };
+
+    const normalizedDescription = normalizeEmptyToNull(payload.custom_description);
+    if (payload.custom_description !== undefined) {
+      appendUpdate('custom_description = ?', normalizedDescription);
+    }
+
+    const normalizedImageUrl = normalizeEmptyToNull(payload.custom_image_url);
+    if (payload.custom_image_url !== undefined) {
+      appendUpdate('custom_image_url = ?', normalizedImageUrl);
+    }
+
+    const normalizeTrimmed = (value, maxLength, fieldName) => {
+      if (value === undefined) {
+        return undefined;
+      }
+      if (value === null || value === '') {
+        return null;
+      }
+      if (typeof value !== 'string') {
+        throw new Error(`${fieldName} must be a string`);
+      }
+      const trimmed = value.trim();
+      if (trimmed.length === 0) {
+        return null;
+      }
+      if (trimmed.length > maxLength) {
+        throw new Error(`${fieldName} must be ${maxLength} characters or fewer`);
+      }
+      return trimmed;
+    };
+
+    try {
+      const normalizedTitle = normalizeTrimmed(payload.custom_title, 255, 'custom_title');
+      if (normalizedTitle !== undefined) {
+        appendUpdate('custom_title = ?', normalizedTitle);
+      }
+    } catch (validationErr) {
+      return res.status(400).json({ error: validationErr.message });
+    }
+
+    try {
+      const normalizedExternalLink = normalizeTrimmed(payload.custom_external_link, 500, 'custom_external_link');
+      if (normalizedExternalLink !== undefined) {
+        appendUpdate('custom_external_link = ?', normalizedExternalLink);
+      }
+    } catch (validationErr) {
+      return res.status(400).json({ error: validationErr.message });
+    }
+
+    let sanitizedCustomEventTagId;
+    if (payload.custom_event_tag_id !== undefined) {
+      if (!payload.custom_event_tag_id) {
+        sanitizedCustomEventTagId = null;
+      } else {
+        const tagCheckSql = 'SELECT id FROM event_tags WHERE id = ?';
+        const [tagRows] = await db.execute(tagCheckSql, [payload.custom_event_tag_id]);
+        if (!tagRows || tagRows.length === 0) {
+          return res.status(400).json({ error: 'custom_event_tag_id does not reference an existing event tag' });
+        }
+        sanitizedCustomEventTagId = payload.custom_event_tag_id;
+      }
+      appendUpdate('custom_event_tag_id = ?', sanitizedCustomEventTagId);
+    }
+
+    // Determine if we need to recalculate crosses_midnight
+    const startProvided = payload.custom_start_time !== undefined;
+    const endProvided = payload.custom_end_time !== undefined;
     let instanceCrossesMidnight = null;
-    
-    if (payload.custom_start_time && payload.custom_end_time) {
-      // Both custom times provided - calculate based on custom times
-      const startTime = payload.custom_start_time.split(':').map(Number);
-      const endTime = payload.custom_end_time.split(':').map(Number);
+
+    if (startProvided || endProvided) {
+      const effectiveCustomStart = startProvided ? normalizedCustomStartTime : instanceMeta.custom_start_time;
+      const effectiveCustomEnd = endProvided ? normalizedCustomEndTime : instanceMeta.custom_end_time;
+      const startTime = (effectiveCustomStart || instanceMeta.master_start_time).split(':').map(Number);
+      const endTime = (effectiveCustomEnd || instanceMeta.master_end_time).split(':').map(Number);
       instanceCrossesMidnight = endTime[0] < startTime[0] || 
                                (endTime[0] === startTime[0] && endTime[1] < startTime[1]);
-    } else if (payload.custom_start_time || payload.custom_end_time) {
-      // Only one custom time provided - need to get the other from master event
-      const [masterEventRows] = await db.execute(
-        'SELECT start_time, end_time, crosses_midnight FROM events WHERE id = (SELECT event_id FROM event_instances WHERE id = ?)',
-        [instanceId]
-      );
-      
-      if (masterEventRows.length > 0) {
-        const masterEvent = masterEventRows[0];
-        const startTime = (payload.custom_start_time || masterEvent.start_time).split(':').map(Number);
-        const endTime = (payload.custom_end_time || masterEvent.end_time).split(':').map(Number);
-        instanceCrossesMidnight = endTime[0] < startTime[0] || 
-                                 (endTime[0] === startTime[0] && endTime[1] < startTime[1]);
-      }
+      appendUpdate('crosses_midnight = ?', instanceCrossesMidnight ? 1 : 0);
     }
-    // If no custom times provided, crosses_midnight will remain unchanged (inherited from master event)
 
-    // Update instance
-    const updateSql = `
-      UPDATE event_instances SET 
-        is_cancelled = COALESCE(?, is_cancelled),
-        custom_start_time = ?,
-        custom_end_time = ?,
-        custom_description = ?,
-        custom_image_url = ?,
-        crosses_midnight = COALESCE(?, crosses_midnight),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `;
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No updatable fields were provided' });
+    }
 
-    await db.execute(updateSql, [
-      payload.is_cancelled,
-      payload.custom_start_time || null,
-      payload.custom_end_time || null,
-      payload.custom_description || null,
-      payload.custom_image_url || null,
-      instanceCrossesMidnight,
-      instanceId
-    ]);
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    const updateSql = `UPDATE event_instances SET ${updates.join(', ')} WHERE id = ?`;
+    params.push(instanceId);
+
+    try {
+      await db.execute(updateSql, params);
+    } catch (err) {
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ error: 'Another instance already exists on that date for this event' });
+      }
+      throw err;
+    }
 
     return res.json({ 
       success: true, 
@@ -629,6 +732,27 @@ async function updateEvent(req, res) {
 
     const currentEvent = checkRows[0];
 
+    const normalizeDateValue = (value) => {
+      if (!value) {
+        return null;
+      }
+      if (typeof value === 'string') {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+          return value;
+        }
+        const parsed = new Date(value);
+        return isNaN(parsed) ? value : parsed.toISOString().split('T')[0];
+      }
+      if (value instanceof Date || typeof value === 'number') {
+        const parsed = value instanceof Date ? value : new Date(value);
+        return isNaN(parsed) ? null : parsed.toISOString().split('T')[0];
+      }
+      return null;
+    };
+
+    const currentStartDate = normalizeDateValue(currentEvent.start_date);
+    const currentRecurrenceEndDate = normalizeDateValue(currentEvent.recurrence_end_date);
+
     const sanitizedExternalLink = payload.external_link !== undefined
       ? (payload.external_link || null)
       : currentEvent.external_link;
@@ -654,6 +778,9 @@ async function updateEvent(req, res) {
     const shouldResetStartTimes = payload.start_time !== undefined;
     const shouldResetEndTimes = payload.end_time !== undefined;
     const shouldResetDescriptions = payload.description !== undefined;
+    const shouldResetImages = payload.image_url !== undefined;
+    const shouldResetTitles = payload.title !== undefined;
+    const shouldResetExternalLinks = payload.external_link !== undefined;
     
 
     const forceRegenerate = payload.regenerate_instances === true;
@@ -685,15 +812,18 @@ async function updateEvent(req, res) {
       }
     }
 
-    // Validate date formats if provided
-    if (payload.start_date || payload.recurrence_end_date) {
+    // Validate date formats only if present in payload
+    if (payload.start_date) {
       const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (payload.start_date && !dateRegex.test(payload.start_date)) {
+      if (!dateRegex.test(payload.start_date)) {
         return res.status(400).json({ 
           error: 'start_date must be in YYYY-MM-DD format' 
         });
       }
-      if (payload.recurrence_end_date && !dateRegex.test(payload.recurrence_end_date)) {
+    }
+    if (payload.recurrence_end_date) {
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(payload.recurrence_end_date)) {
         return res.status(400).json({ 
           error: 'recurrence_end_date must be in YYYY-MM-DD format' 
         });
@@ -712,33 +842,39 @@ async function updateEvent(req, res) {
       }
     }
 
-    // If recurrence data is being updated, validate it
-    const updatedRecurrenceData = {
-      recurrence_pattern: payload.recurrence_pattern || currentEvent.recurrence_pattern,
-      recurrence_days: payload.recurrence_days !== undefined ? payload.recurrence_days : 
-                      (currentEvent.recurrence_days ? JSON.parse(currentEvent.recurrence_days) : null),
-      start_date: payload.start_date || currentEvent.start_date,
-      recurrence_end_date: payload.recurrence_end_date || currentEvent.recurrence_end_date,
-      recurrence_end_occurrences: nextRecurrenceEndOccurrences
-    };
 
-    const validation = validateRecurrenceData(updatedRecurrenceData);
-    if (!validation.isValid) {
-      return res.status(400).json({ 
-        error: 'Recurrence validation failed',
-        details: validation.errors 
+    // Only validate recurrence data and regenerate instances if recurrence-related fields are present
+    const recurrenceFields = [
+      'recurrence_pattern',
+      'recurrence_days',
+      'start_date',
+      'recurrence_end_date',
+      'recurrence_end_occurrences'
+    ];
+    const recurrenceChanged = recurrenceFields.some(field => payload[field] !== undefined);
+    let shouldRegenerate = false;
+    let updatedRecurrenceData = null;
+    // Only run recurrence validation if recurrence fields are being changed or forceRegenerate is true
+    if ((recurrenceChanged || forceRegenerate) && (payload.start_date !== undefined || payload.recurrence_pattern !== undefined || payload.recurrence_days !== undefined || payload.recurrence_end_date !== undefined || payload.recurrence_end_occurrences !== undefined)) {
+      updatedRecurrenceData = {
+        recurrence_pattern: payload.recurrence_pattern || currentEvent.recurrence_pattern,
+        recurrence_days: payload.recurrence_days !== undefined ? payload.recurrence_days : 
+                        (currentEvent.recurrence_days ? JSON.parse(currentEvent.recurrence_days) : null),
+        start_date: payload.start_date || currentStartDate,
+        recurrence_end_date: payload.recurrence_end_date || currentRecurrenceEndDate,
+        recurrence_end_occurrences: nextRecurrenceEndOccurrences
+      };
+      const validation = validateRecurrenceData(updatedRecurrenceData, {
+        requireStartDate: payload.start_date !== undefined || !currentStartDate
       });
+      if (!validation.isValid) {
+        return res.status(400).json({ 
+          error: 'Recurrence validation failed',
+          details: validation.errors 
+        });
+      }
+      shouldRegenerate = true;
     }
-
-    // Check if recurrence or date data has changed (requires instance regeneration)
-    const recurrenceChanged = 
-      payload.recurrence_pattern !== undefined ||
-      payload.recurrence_days !== undefined ||
-      payload.start_date !== undefined ||
-      payload.recurrence_end_date !== undefined ||
-      payload.recurrence_end_occurrences !== undefined;
-
-    const shouldRegenerate = recurrenceChanged || forceRegenerate;
 
     // If both times provided, calculate crosses_midnight
     let crossesMidnight = null;
@@ -843,6 +979,22 @@ async function updateEvent(req, res) {
         );
       }
 
+      if (shouldResetTitles) {
+        await conn.execute(
+          `UPDATE event_instances SET custom_title = NULL, updated_at = CURRENT_TIMESTAMP 
+           WHERE event_id = ? AND date >= ?`,
+          [eventId, todayStr]
+        );
+      }
+
+      if (shouldResetExternalLinks) {
+        await conn.execute(
+          `UPDATE event_instances SET custom_external_link = NULL, updated_at = CURRENT_TIMESTAMP 
+           WHERE event_id = ? AND date >= ?`,
+          [eventId, todayStr]
+        );
+      }
+
       if (payload.cancel_all_instances === true) {
         await conn.execute(
           `UPDATE event_instances SET is_cancelled = true, updated_at = CURRENT_TIMESTAMP 
@@ -859,6 +1011,12 @@ async function updateEvent(req, res) {
 
       // If recurrence data changed or regeneration forced, rebuild future instances
       if (shouldRegenerate) {
+        if (!updatedRecurrenceData.start_date) {
+          await conn.rollback();
+          return res.status(400).json({
+            error: 'Cannot regenerate recurrence without a start_date set on this event'
+          });
+        }
         // Delete all future instances (keep past ones to preserve history)
         await conn.execute(
           `DELETE FROM event_instances WHERE event_id = ? AND date >= ?`,

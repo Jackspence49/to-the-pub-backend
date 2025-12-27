@@ -104,8 +104,9 @@ function formatDateForDB(date) {
  * @param {Object} recurrenceData - Object containing recurrence fields
  * @returns {Object} Validation result with isValid and errors
  */
-function validateRecurrenceData(recurrenceData) {
+function validateRecurrenceData(recurrenceData, options = {}) {
   const { recurrence_pattern, recurrence_days, start_date, recurrence_end_date, recurrence_end_occurrences } = recurrenceData;
+  const { requireStartDate = true } = options;
   const errors = [];
 
   // Valid patterns
@@ -116,7 +117,7 @@ function validateRecurrenceData(recurrenceData) {
 
   // For recurring events, start date is required, and either end date or occurrence count is required
   if (recurrence_pattern !== 'none') {
-    if (!start_date) {
+    if (requireStartDate && !start_date) {
       errors.push('start_date is required for recurring events');
     }
     if (!recurrence_end_date && !recurrence_end_occurrences) {

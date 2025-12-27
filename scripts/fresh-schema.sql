@@ -124,16 +124,21 @@ CREATE TABLE event_instances (
     custom_end_time TIME NULL,
     custom_description TEXT NULL,
     custom_image_url VARCHAR(500) NULL,
+        custom_title VARCHAR(255) NULL,
+        custom_event_tag_id CHAR(36) NULL,
+        custom_external_link VARCHAR(500) NULL,
     crosses_midnight BOOLEAN DEFAULT FALSE,
     
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY (custom_event_tag_id) REFERENCES event_tags(id) ON DELETE SET NULL,
     UNIQUE KEY unique_event_date (event_id, date),
     INDEX idx_instances_date (date),
     INDEX idx_instances_event_id (event_id),
-    INDEX idx_instances_cancelled (is_cancelled)
+    INDEX idx_instances_cancelled (is_cancelled),
+    INDEX idx_instances_custom_tag (custom_event_tag_id)
 );
 
 -- ===========================
@@ -172,8 +177,9 @@ SELECT
     ei.crosses_midnight,
     COALESCE(ei.custom_description, e.description) as description,
     COALESCE(ei.custom_image_url, e.image_url) as image_url,
-    e.title,
-    e.external_link,
+        COALESCE(ei.custom_title, e.title) as title,
+        COALESCE(ei.custom_external_link, e.external_link) as external_link,
+        COALESCE(ei.custom_event_tag_id, e.event_tag_id) as event_tag_id,
     e.bar_id,
     b.name as bar_name,
     b.address_city,
@@ -199,8 +205,9 @@ SELECT
     ei.crosses_midnight,
     COALESCE(ei.custom_description, e.description) as description,
     COALESCE(ei.custom_image_url, e.image_url) as image_url,
-    e.title,
-    e.external_link,
+        COALESCE(ei.custom_title, e.title) as title,
+        COALESCE(ei.custom_external_link, e.external_link) as external_link,
+        COALESCE(ei.custom_event_tag_id, e.event_tag_id) as event_tag_id,
     e.bar_id,
     b.name as bar_name,
     b.address_city,
