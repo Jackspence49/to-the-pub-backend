@@ -277,4 +277,105 @@ describe('Events Routes Tests', () => {
       }
     });
   });
+
+  describe('Location-based filtering for event instances', () => {
+    const locationTestDate = '2099-12-31';
+    const locationBars = [
+      { id: uuidv4(), name: 'Distance Test NYC', lat: 40.7128, lon: -74.0060 },
+      { id: uuidv4(), name: 'Distance Test LA', lat: 34.0522, lon: -118.2437 }
+    ];
+    const locationEvents = [];
+    const locationInstances = [];
+    const locationEventTagId = uuidv4();
+    const locationEventTagName = `distance-test-tag-${Date.now()}`;
+
+    beforeAll(async () => {
+      await db.execute(
+        'INSERT INTO event_tags (id, name) VALUES (?, ?)',
+        [locationEventTagId, locationEventTagName]
+      );
+
+      for (const bar of locationBars) {
+        await db.execute(`
+          INSERT INTO bars (id, name, address_street, address_city, address_state, address_zip, latitude, longitude, is_active)
+          VALUES (?, ?, ?, 'Test City', 'TS', '00000', ?, ?, 1)
+        `, [bar.id, bar.name, `${bar.name} Street`, bar.lat, bar.lon]);
+
+        const eventId = uuidv4();
+        locationEvents.push(eventId);
+        await db.execute(`
+          INSERT INTO events (
+            id, bar_id, title, description, start_time, end_time, crosses_midnight,
+            image_url, event_tag_id, external_link, recurrence_pattern, recurrence_days,
+            start_date, recurrence_end_date, recurrence_end_occurrences, is_active
+          ) VALUES (?, ?, ?, 'Distance test event', '17:00:00', '19:00:00', 0,
+            NULL, ?, NULL, 'none', NULL, ?, ?, NULL, 1)
+        `, [eventId, bar.id, `${bar.name} Event`, locationEventTagId, locationTestDate, locationTestDate]);
+
+        const instanceId = uuidv4();
+        locationInstances.push(instanceId);
+        await db.execute(`
+          INSERT INTO event_instances (id, event_id, date, is_cancelled, crosses_midnight)
+          VALUES (?, ?, ?, 0, 0)
+        `, [instanceId, eventId, locationTestDate]);
+      }
+    });
+
+    afterAll(async () => {
+      for (const instanceId of locationInstances) {
+        await db.execute('DELETE FROM event_instances WHERE id = ?', [instanceId]);
+      }
+      for (const eventId of locationEvents) {
+        await db.execute('DELETE FROM events WHERE id = ?', [eventId]);
+      }
+      for (const bar of locationBars) {
+        await db.execute('DELETE FROM bars WHERE id = ?', [bar.id]);
+      }
+      await db.execute('DELETE FROM event_tags WHERE id = ?', [locationEventTagId]);
+    });
+
+    it('orders instances by distance when coordinates are provided', async () => {
+      const response = await request(app)
+        .get('/events/instances')
+        .query({
+          date_from: locationTestDate,
+          date_to: locationTestDate,
+          event_tag_id: locationEventTagId,
+          lat: 40.73061,
+          lon: -73.935242,
+          unit: 'miles'
+        })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.length).toBeGreaterThanOrEqual(2);
+      expect(response.body.data[0].bar_id).toBe(locationBars[0].id);
+      expect(response.body.data[0]).toHaveProperty('distance_miles');
+      expect(response.body.meta.location).toMatchObject({
+        sorted_by_distance: true,
+        unit: 'miles'
+      });
+      expect(response.body.data[0].distance_miles).toBeLessThan(response.body.data[1].distance_miles);
+    });
+
+    it('applies radius filtering to event instances', async () => {
+      const response = await request(app)
+        .get('/events/instances')
+        .query({
+          date_from: locationTestDate,
+          date_to: locationTestDate,
+          event_tag_id: locationEventTagId,
+          lat: 40.73061,
+          lon: -73.935242,
+          radius: 100,
+          unit: 'miles'
+        })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.length).toBe(1);
+      expect(response.body.data[0].bar_id).toBe(locationBars[0].id);
+      expect(response.body.meta.filters.radius).toBe(100);
+    });
+  });
 });

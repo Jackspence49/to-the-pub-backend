@@ -436,6 +436,57 @@ describe('Bars Routes Integration Tests', () => {
     });
   });
 
+  describe('GET /bars/:barId/links - Public Route', () => {
+    test('should return all link fields for a bar', async () => {
+      const mockLinks = {
+        id: 'bar-1',
+        website: 'https://example.com',
+        instagram: 'https://instagram.com/example',
+        facebook: 'https://facebook.com/example',
+        twitter: 'https://twitter.com/example',
+        posh: 'https://posh.vip/example',
+        eventbrite: 'https://eventbrite.com/e/example'
+      };
+
+      db.execute.mockResolvedValueOnce([[mockLinks]]);
+
+      const response = await request(app)
+        .get('/bars/bar-1/links')
+        .expect(200);
+
+      expect(response.body).toHaveProperty('success', true);
+      expect(response.body.data).toMatchObject({
+        bar_id: 'bar-1',
+        website: 'https://example.com',
+        instagram: 'https://instagram.com/example',
+        facebook: 'https://facebook.com/example',
+        twitter: 'https://twitter.com/example',
+        posh: 'https://posh.vip/example',
+        eventbrite: 'https://eventbrite.com/e/example'
+      });
+    });
+
+    test('should return 404 when bar is not found', async () => {
+      db.execute.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/bars/unknown-bar/links')
+        .expect(404);
+
+      expect(response.body).toHaveProperty('error', 'Bar not found');
+    });
+
+    test('should handle database errors gracefully', async () => {
+      db.execute.mockRejectedValueOnce(new Error('Database error'));
+
+      const response = await request(app)
+        .get('/bars/bar-1/links')
+        .expect(500);
+
+      expect(response.body).toHaveProperty('error', 'Failed to fetch bar links');
+    });
+  });
+
   describe('POST /bars - Protected Route', () => {
     test('should create bar with valid authentication', async () => {
       const newBar = {
@@ -446,6 +497,11 @@ describe('Bars Routes Integration Tests', () => {
         address_zip: '12345',
         phone: '555-0123',
         website: 'https://newtestbar.com',
+        instagram: '@newtestbar',
+        facebook: 'newtestbarfb',
+        twitter: 'https://twitter.com/newtestbar',
+        posh: 'https://posh.vip/newtestbar',
+        eventbrite: 'https://eventbrite.com/e/newtestbar',
         hours: [
           { day_of_week: 1, open_time: '12:00', close_time: '24:00', is_closed: false },
           { day_of_week: 2, open_time: '12:00', close_time: '24:00', is_closed: false }
@@ -526,7 +582,10 @@ describe('Bars Routes Integration Tests', () => {
       const updateData = {
         name: 'Updated Bar Name',
         address_street: '789 Updated St',
-        phone: '555-9876'
+        phone: '555-9876',
+        twitter: 'https://twitter.com/updatedbar',
+        posh: 'https://posh.vip/updatedbar',
+        eventbrite: 'https://eventbrite.com/e/updatedbar'
       };
 
       // Mock check if bar exists

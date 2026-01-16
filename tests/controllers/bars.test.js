@@ -649,6 +649,9 @@ describe('Bars Controller Tests', () => {
       website: 'https://newtestbar.com',
       instagram: '@newtestbar',
       facebook: 'newtestbar',
+      twitter: 'https://twitter.com/newtestbar',
+      posh: 'https://posh.vip/newtestbar',
+      eventbrite: 'https://eventbrite.com/e/newtestbar',
       hours: [
         {
           day_of_week: 0,
@@ -800,7 +803,10 @@ describe('Bars Controller Tests', () => {
     const updateData = {
       name: 'Updated Bar Name',
       description: 'Updated description',
-      phone: '555-9999'
+      phone: '555-9999',
+      twitter: 'https://twitter.com/updatedbar',
+      posh: 'https://posh.vip/updatedbar',
+      eventbrite: 'https://eventbrite.com/e/updatedbar'
     };
 
     test('should successfully update a bar with authentication', async () => {

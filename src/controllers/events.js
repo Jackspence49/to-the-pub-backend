@@ -220,7 +220,7 @@ async function createEvent(req, res) {
 }
 
 /**
- * GET /events/instances?bar_id=uuid&event_tag_id=uuid&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&page=1&limit=20
+ * GET /events/instances?bar_id=uuid&event_tag_id=uuid&date_from=2024-01-01&date_to=2024-12-31&upcoming=true&lat=40.71&lon=-74.0&radius=5&unit=miles&page=1&limit=20
  * Returns event instances with optional filtering
  * This replaces the old getAllEvents function to work with the new schema
  */
@@ -232,6 +232,10 @@ async function getEventInstances(req, res) {
       date_to, 
       upcoming, 
       event_tag_id,
+      lat,
+      lon,
+      radius,
+      unit,
       page = 1, 
       limit = 20 
     } = req.query;
@@ -243,6 +247,47 @@ async function getEventInstances(req, res) {
     }
     if (date_to && !dateRegex.test(date_to)) {
       return res.status(400).json({ error: 'date_to must be in YYYY-MM-DD format' });
+    }
+
+    // Validate and normalize location parameters (shared logic with /bars)
+    let userLat = null;
+    let userLon = null;
+    let radiusValue = null;
+    let distanceUnit = 'km';
+
+    if (lat !== undefined || lon !== undefined) {
+      if (lat === undefined || lon === undefined) {
+        return res.status(400).json({ error: 'Both lat and lon are required when using location-based filtering.' });
+      }
+
+      userLat = parseFloat(lat);
+      userLon = parseFloat(lon);
+
+      if (
+        Number.isNaN(userLat) ||
+        Number.isNaN(userLon) ||
+        userLat < -90 || userLat > 90 ||
+        userLon < -180 || userLon > 180
+      ) {
+        return res.status(400).json({ error: 'Invalid latitude or longitude. Latitude must be between -90 and 90, longitude between -180 and 180.' });
+      }
+
+      if (radius !== undefined) {
+        radiusValue = parseFloat(radius);
+        if (Number.isNaN(radiusValue) || radiusValue <= 0) {
+          return res.status(400).json({ error: 'Radius must be a positive number.' });
+        }
+      }
+
+      if (unit !== undefined) {
+        const normalizedUnit = unit.toLowerCase();
+        if (normalizedUnit !== 'km' && normalizedUnit !== 'miles') {
+          return res.status(400).json({ error: 'Unit must be either "km" or "miles".' });
+        }
+        distanceUnit = normalizedUnit;
+      }
+    } else if (radius !== undefined || unit !== undefined) {
+      return res.status(400).json({ error: 'Radius and unit parameters require both lat and lon to be provided.' });
     }
 
     // Build dynamic query using direct joins instead of views to ensure all fields are included
@@ -266,8 +311,12 @@ async function getEventInstances(req, res) {
       'b.address_state',
       'b.address_zip',
       'b.phone',
-      'b.website'
+      'b.website',
+      'b.latitude',
+      'b.longitude'
     ];
+
+    let selectParams = [];
     
     let fromClause = `
       FROM event_instances ei
@@ -277,28 +326,54 @@ async function getEventInstances(req, res) {
     `;
     
     let whereClauses = [];
-    let params = [];
+    let whereParams = [];
+
+    if (userLat !== null && userLon !== null) {
+      const earthRadius = distanceUnit === 'miles' ? 3959 : 6371;
+      selectClauses.push(`ROUND((
+        ${earthRadius} * acos(
+          cos(radians(?)) * cos(radians(b.latitude)) * 
+          cos(radians(b.longitude) - radians(?)) + 
+          sin(radians(?)) * sin(radians(b.latitude))
+        )
+      ), 2) as distance_${distanceUnit}`);
+      selectParams.push(userLat, userLon, userLat);
+
+      // Exclude bars that lack coordinates when sorting/filtering by distance
+      whereClauses.push('b.latitude IS NOT NULL AND b.longitude IS NOT NULL');
+
+      if (radiusValue !== null) {
+        whereClauses.push(`(
+          ${earthRadius} * acos(
+            cos(radians(?)) * cos(radians(b.latitude)) * 
+            cos(radians(b.longitude) - radians(?)) + 
+            sin(radians(?)) * sin(radians(b.latitude))
+          )
+        ) <= ?`);
+        whereParams.push(userLat, userLon, userLat, radiusValue);
+      }
+    }
 
     // Simplify tag filtering to single event_tag_id
     if (event_tag_id) {
       whereClauses.push('COALESCE(ei.custom_event_tag_id, e.event_tag_id) = ?');
-      params.push(event_tag_id);
+      whereParams.push(event_tag_id);
     }
 
     // Add filter conditions
     if (bar_id) {
       whereClauses.push('e.bar_id = ?');
-      params.push(bar_id);
+      whereParams.push(bar_id);
     }
 
     if (date_from) {
       whereClauses.push('ei.date >= ?');
-      params.push(date_from);
+      whereParams.push(date_from);
     }
 
     if (date_to) {
       whereClauses.push('ei.date <= ?');
-      params.push(date_to);
+      whereParams.push(date_to);
     }
 
     // Add upcoming filter
@@ -309,28 +384,28 @@ async function getEventInstances(req, res) {
     // Don't show cancelled instances
     whereClauses.push('ei.is_cancelled = false');
 
+    const whereSql = whereClauses.length > 0 ? ` AND ${whereClauses.join(' AND ')}` : '';
+
     // Construct query
-    let selectSql = `SELECT ${selectClauses.join(', ')} ${fromClause}`;
-    if (whereClauses.length > 0) {
-      selectSql += ` AND ${whereClauses.join(' AND ')}`;
+    let selectSql = `SELECT ${selectClauses.join(', ')} ${fromClause}${whereSql}`;
+    if (userLat !== null && userLon !== null) {
+      selectSql += ` ORDER BY ei.date ASC, start_time ASC, distance_${distanceUnit} ASC`;
+    } else {
+      selectSql += ` ORDER BY ei.date ASC, start_time ASC`;
     }
-    selectSql += ` ORDER BY ei.date ASC, start_time ASC`;
 
     // Add pagination
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const offset = (pageNum - 1) * limitNum;
     selectSql += ` LIMIT ? OFFSET ?`;
-    params.push(limitNum, offset);
-
-    const [rows] = await db.query(selectSql, params);
+    const selectQueryParams = [...selectParams, ...whereParams, limitNum, offset];
+    const [rows] = await db.query(selectSql, selectQueryParams);
 
     // Get total count for pagination metadata
-    let countSql = `SELECT COUNT(*) as total ${fromClause}`;
-    if (whereClauses.length > 0) {
-      countSql += ` AND ${whereClauses.join(' AND ')}`;
-    }
-    const [countRows] = await db.query(countSql, params.slice(0, -2)); // Remove limit and offset params
+    const countSql = `SELECT COUNT(*) as total ${fromClause}${whereSql}`;
+    const countParams = [...whereParams];
+    const [countRows] = await db.query(countSql, countParams);
     const totalCount = countRows[0].total;
 
     return res.json({ 
@@ -347,8 +422,16 @@ async function getEventInstances(req, res) {
           date_from, 
           date_to, 
           upcoming,
-          event_tag_id
-        }
+          event_tag_id,
+          radius: radiusValue,
+          unit: userLat !== null ? distanceUnit : null
+        },
+        location: userLat !== null && userLon !== null ? {
+          lat: userLat,
+          lon: userLon,
+          sorted_by_distance: true,
+          unit: distanceUnit
+        } : null
       }
     });
   } catch (err) {

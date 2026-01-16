@@ -13,6 +13,8 @@ router.get('/search/name', optionalAuth, barsController.searchBarsByName);
 router.get('/:barId/tags', barsController.getBarTags);
 // GET /bars/:barId/hours -> get all hours for a specific bar
 router.get('/:barId/hours', barsController.getBarHours);
+// GET /bars/:barId/links -> get all public links for a specific bar
+router.get('/:barId/links', barsController.getBarLinks);
 
 // GET /bars/:id -> get single bar with optional includes (optional auth for future features)
 router.get('/:id', optionalAuth, barsController.getBar);

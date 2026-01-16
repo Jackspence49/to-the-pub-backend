@@ -16,6 +16,9 @@ const { v4: uuidv4 } = require('uuid');
  *  website, 
  *  instagram, 
  *  facebook,
+ *  twitter,
+ *  posh,
+ *  eventbrite,
  *  hours: [{ day_of_week: 0..6, open_time: 'HH:MM:SS', close_time: 'HH:MM:SS', is_closed: boolean }, ...],
  *  tag_ids: ['uuid', ...] // existing tag ids to relate
  * }
@@ -61,7 +64,7 @@ async function createBar(req, res) {
 
 // Inserting Business information into Bar table
     const barId = uuidv4();
-    const insertBarSql = `INSERT INTO bars (id, name, description, address_street, address_city, address_state, address_zip, latitude, longitude, phone, website, instagram, facebook, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const insertBarSql = `INSERT INTO bars (id, name, description, address_street, address_city, address_state, address_zip, latitude, longitude, phone, website, instagram, facebook, twitter, posh, eventbrite, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     const barParams = [
       barId,
       payload.name,
@@ -76,6 +79,9 @@ async function createBar(req, res) {
       payload.website || null,
       payload.instagram || null,
       payload.facebook || null,
+      payload.twitter || null,
+      payload.posh || null,
+      payload.eventbrite || null,
       payload.is_active === false ? 0 : 1
     ];
     await conn.execute(insertBarSql, barParams);
@@ -606,6 +612,9 @@ async function updateBar(req, res) {
           website = COALESCE(?, website),
           instagram = COALESCE(?, instagram),
           facebook = COALESCE(?, facebook),
+          twitter = COALESCE(?, twitter),
+          posh = COALESCE(?, posh),
+          eventbrite = COALESCE(?, eventbrite),
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `;
@@ -623,6 +632,9 @@ async function updateBar(req, res) {
         payload.website || null,
         payload.instagram || null,
         payload.facebook || null,
+        payload.twitter || null,
+        payload.posh || null,
+        payload.eventbrite || null,
         barId
       ]);
       
@@ -842,6 +854,54 @@ async function removeTagFromBar(req, res) {
   } catch (err) {
     console.error('Error removing tag from bar:', err.message || err);
     return res.status(500).json({ error: 'Failed to remove tag from bar' });
+  }
+}
+
+/**
+ * GET /bars/:barId/links
+ * Returns all public-facing links for a specific bar
+ * Public endpoint - no authentication required
+ */
+async function getBarLinks(req, res) {
+  try {
+    const { barId } = req.params;
+
+    const linksSql = `
+      SELECT 
+        id,
+        website,
+        instagram,
+        facebook,
+        twitter,
+        posh,
+        eventbrite
+      FROM bars 
+      WHERE id = ? AND is_active = 1
+    `;
+
+    const [rows] = await db.execute(linksSql, [barId]);
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'Bar not found' });
+    }
+
+    const bar = rows[0];
+
+    return res.json({
+      success: true,
+      data: {
+        bar_id: bar.id,
+        website: bar.website || null,
+        instagram: bar.instagram || null,
+        facebook: bar.facebook || null,
+        twitter: bar.twitter || null,
+        posh: bar.posh || null,
+        eventbrite: bar.eventbrite || null
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching bar links:', err.message || err);
+    return res.status(500).json({ error: 'Failed to fetch bar links' });
   }
 }
 
@@ -1092,6 +1152,7 @@ module.exports = {
   searchBarsByName,
   addTagToBar,
   removeTagFromBar,
+  getBarLinks,
   getBarTags,
   getBarHours,
   updateBarHours

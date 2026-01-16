@@ -8,14 +8,14 @@ const { authenticateToken } = require('../utils/auth');
 /**
  * GET /events
  * Get all events with optional filtering
- * Query params: bar_id, date_from, date_to, upcoming, tag_ids, page, limit
+ * Query params: bar_id, date_from, date_to, upcoming, event_tag_id, lat, lon, radius, unit, page, limit
  */
 router.get('/', eventsController.getAllEvents);
 
 /**
  * GET /events/instances
  * Get event instances with optional filtering
- * Query params: bar_id, date_from, date_to, upcoming, tag_ids, page, limit
+ * Query params: bar_id, date_from, date_to, upcoming, event_tag_id, lat, lon, radius, unit, page, limit
  */
 router.get('/instances', eventsController.getEventInstances);
 

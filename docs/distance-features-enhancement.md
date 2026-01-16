@@ -40,6 +40,13 @@ This enhancement adds comprehensive distance-based sorting, radius filtering, an
 - **Limit**: Must be between 1 and 100
 - **Coordinate Filtering**: Only includes bars with valid coordinates when distance features used
 
+#### 6. Event Instance Location Filters
+- **Endpoints**: `GET /events` and `GET /events/instances`
+- **Parameters**: Same `lat`, `lon`, `radius`, `unit` set as `/bars`
+- **Sorting**: Instances ordered by date, time, then distance
+- **Output**: Adds `distance_km`/`distance_miles` and mirrors `/bars` metadata (`meta.location`)
+- **Radius Filter**: Uses bar coordinates to keep nearby events only
+
 ### API Endpoint Updates
 
 #### Enhanced GET /bars
@@ -56,6 +63,49 @@ GET /bars?lat=40.7589&lon=-73.9851&page=1&limit=10
 GET /bars?lat=40.7589&lon=-73.9851&radius=5&page=2&limit=15
 GET /bars?lat=40.7589&lon=-73.9851&radius=3&unit=miles&page=1&limit=5
 GET /bars?lat=40.7589&lon=-73.9851&radius=10&include=hours,tags&open_now=true&page=1&limit=25
+```
+
+#### Enhanced GET /events & /events/instances
+
+**New Query Parameters:**
+```
+?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD&event_tag_id={uuid}&lat={latitude}&lon={longitude}&radius={distance}&unit={km|miles}&page={page}&limit={limit}
+```
+
+**Behavior Updates:**
+- Sorts results by `date`, `start_time`, then `distance_{unit}` when coordinates provided
+- Filters by bar proximity when `radius` present (requires `lat`/`lon`)
+- Adds `distance_km` or `distance_miles` per instance plus `meta.location` mirroring `/bars`
+- Works for both `/events` (alias of `/events/instances`) and `/events/instances`
+
+**Example Requests:**
+```
+GET /events/instances?date_from=2099-12-31&date_to=2099-12-31&lat=40.73&lon=-73.93&radius=50&unit=miles
+GET /events?event_tag_id=abc123&lat=40.73&lon=-73.93&unit=km&page=1&limit=10
+```
+
+**Response Additions:**
+```json
+{
+  "data": [
+    {
+      "instance_id": "uuid",
+      "date": "2099-12-31",
+      "start_time": "17:00:00",
+      "distance_miles": 3.42,
+      "bar_latitude": 40.7128,
+      "bar_longitude": -74.006
+    }
+  ],
+  "meta": {
+    "location": {
+      "lat": 40.73,
+      "lon": -73.93,
+      "sorted_by_distance": true,
+      "unit": "miles"
+    }
+  }
+}
 ```
 
 **Enhanced Response Format:**
