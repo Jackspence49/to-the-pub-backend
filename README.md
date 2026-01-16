@@ -9,6 +9,7 @@ A comprehensive Express.js API for managing bar data, including locations, hours
 - **Advanced Filtering**: Filter bars by location, tags, operating hours, and events
 - **Search Functionality**: Search bars by name with fuzzy matching
 - **Authentication**: JWT-based authentication for protected operations
+- **App User Accounts**: Separate `/app-users` endpoints for customer registration and login
 - **Soft Deletes**: Data preservation with soft deletion capabilities
 
 ## API Documentation
@@ -27,3 +28,14 @@ on CI or the host.
 
 Create a local `.env` file (gitignored) with the variables shown in
 `.env.example` before running the app locally.
+
+## App User Authentication Endpoints
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| POST | `/app-users/register` | Create a customer-facing account and receive a JWT |
+| POST | `/app-users/login` | Exchange credentials for a JWT |
+| GET | `/app-users/me` | Retrieve the authenticated app user's profile (requires token) |
+| PUT | `/app-users/me` | Update profile fields or rotate the password (requires token) |
+| POST | `/app-users/forgot-password` | Start the password reset flow |
+| POST | `/app-users/reset-password` | Complete password reset with a token |

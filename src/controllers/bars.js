@@ -1,6 +1,47 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 
+const normalizeTimeString = value => {
+  if (value === undefined || value === null || value === '' || value === 'null') {
+    return null;
+  }
+  let stringValue = typeof value === 'string' ? value : String(value);
+  if (/^\d{2}:\d{2}:\d{2}$/.test(stringValue)) {
+    return stringValue;
+  }
+  if (/^\d{2}:\d{2}$/.test(stringValue)) {
+    return `${stringValue}:00`;
+  }
+  if (/^\d{1,2}$/.test(stringValue)) {
+    return `${stringValue.padStart(2, '0')}:00:00`;
+  }
+  return null;
+};
+
+const fetchBarHours = async barId => {
+  const hoursSql = `
+    SELECT 
+      id,
+      day_of_week,
+      open_time,
+      close_time,
+      is_closed,
+      crosses_midnight
+    FROM bar_hours 
+    WHERE bar_id = ? 
+    ORDER BY day_of_week
+  `;
+  const [rows] = await db.execute(hoursSql, [barId]);
+  return rows.map(hour => ({
+    id: hour.id,
+    day_of_week: hour.day_of_week,
+    open_time: normalizeTimeString(hour.open_time),
+    close_time: normalizeTimeString(hour.close_time),
+    is_closed: Boolean(hour.is_closed),
+    crosses_midnight: Boolean(hour.crosses_midnight)
+  }));
+};
+
 /**
  * Expected payload shape:
  * {
@@ -62,10 +103,28 @@ async function createBar(req, res) {
       return res.status(409).json({ error: 'A bar with this name and address already exists' });
     }
 
-// Inserting Business information into Bar table
+    // Insert bar record
     const barId = uuidv4();
-    const insertBarSql = `INSERT INTO bars (id, name, description, address_street, address_city, address_state, address_zip, latitude, longitude, phone, website, instagram, facebook, twitter, posh, eventbrite, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-    const barParams = [
+    const insertBarSql = `INSERT INTO bars (
+      id,
+      name,
+      description,
+      address_street,
+      address_city,
+      address_state,
+      address_zip,
+      latitude,
+      longitude,
+      phone,
+      website,
+      instagram,
+      facebook,
+      twitter,
+      posh,
+      eventbrite,
+      is_active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    await conn.execute(insertBarSql, [
       barId,
       payload.name,
       payload.description || null,
@@ -82,45 +141,50 @@ async function createBar(req, res) {
       payload.twitter || null,
       payload.posh || null,
       payload.eventbrite || null,
-      payload.is_active === false ? 0 : 1
-    ];
-    await conn.execute(insertBarSql, barParams);
+      1
+    ]);
 
-    // Insert hours to bar-hours if provided
-    if (Array.isArray(payload.hours)) {
-      const insertHourSql = `INSERT INTO bar_hours (id, bar_id, day_of_week, open_time, close_time, is_closed, crosses_midnight) VALUES (?, ?, ?, ?, ?, ?, ?)`;
-      for (const h of payload.hours) {
+    // Insert hours if provided
+    if (Array.isArray(payload.hours) && payload.hours.length > 0) {
+      const insertHourSql = `
+        INSERT INTO bar_hours (
+          id,
+          bar_id,
+          day_of_week,
+          open_time,
+          close_time,
+          is_closed,
+          crosses_midnight
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `;
+      for (const hour of payload.hours) {
         const hourId = uuidv4();
-        
-        // Determine if hours cross midnight
         let crossesMidnight = false;
-        if (!h.is_closed && h.open_time && h.close_time) {
-          // Convert time strings to comparable format (assuming HH:MM:SS or HH:MM format)
-          const openTime = h.open_time.split(':').map(Number);
-          const closeTime = h.close_time.split(':').map(Number);
-          
-          // Compare hours, then minutes if hours are equal
-          if (closeTime[0] < openTime[0] || 
-              (closeTime[0] === openTime[0] && closeTime[1] < openTime[1])) {
+        if (!hour.is_closed && hour.open_time && hour.close_time) {
+          const openTime = hour.open_time.split(':').map(Number);
+          const closeTime = hour.close_time.split(':').map(Number);
+          if (
+            closeTime[0] < openTime[0] ||
+            (closeTime[0] === openTime[0] && closeTime[1] < openTime[1])
+          ) {
             crossesMidnight = true;
           }
         }
-        
-        const hourParams = [
+
+        await conn.execute(insertHourSql, [
           hourId,
           barId,
-          h.day_of_week,
-          h.open_time || null,
-          h.close_time || null,
-          h.is_closed ? 1 : 0,
+          hour.day_of_week,
+          hour.is_closed ? null : hour.open_time,
+          hour.is_closed ? null : hour.close_time,
+          hour.is_closed ? 1 : 0,
           crossesMidnight ? 1 : 0
-        ];
-        await conn.execute(insertHourSql, hourParams);
+        ]);
       }
     }
 
     // Insert bar_tag_assignments relationships if provided (Just submitting tag ids, more efficient))
-    if (Array.isArray(payload.tag_ids)) {
+    if (Array.isArray(payload.tag_ids) && payload.tag_ids.length > 0) {
       const insertBarTagSql = `INSERT INTO bar_tag_assignments (bar_id, tag_id) VALUES (?, ?)`;
       for (const tagId of payload.tag_ids) {
         await conn.execute(insertBarTagSql, [barId, tagId]);
@@ -284,13 +348,6 @@ async function getAllBars(req, res) {
     }
     
     // Add joins and select clauses based on include parameters
-    if (includeOptions.includes('hours')) {
-      joinClauses.push('LEFT JOIN bar_hours bh ON b.id = bh.bar_id');
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed, ':', bh.crosses_midnight)
-      ) as hours`);
-    }
-    
     if (includeOptions.includes('tags')) {
       joinClauses.push('LEFT JOIN bar_tag_assignments bt ON b.id = bt.bar_id');
       joinClauses.push('LEFT JOIN bar_tags t ON bt.tag_id = t.id');
@@ -323,12 +380,11 @@ async function getAllBars(req, res) {
     if (userLat !== null && userLon !== null) {
       selectSql += ` ORDER BY distance_${distanceUnit} ASC, b.name`;
     } else {
-      selectSql += ` ORDER BY b.name`;
+      selectSql += ' ORDER BY b.name';
     }
     
     // Get total count for pagination metadata (before applying LIMIT/OFFSET)
     let countSql = selectSql.replace(`SELECT ${selectClauses.join(', ')}`, 'SELECT COUNT(DISTINCT b.id) as total');
-    // Remove ORDER BY for count query (not needed and can cause issues with complex queries)
     countSql = countSql.replace(/ ORDER BY.*$/, '');
     
     const [countResult] = await db.query(countSql, params);
@@ -340,23 +396,11 @@ async function getAllBars(req, res) {
     
     const [rows] = await db.query(selectSql, params);
     
-    // Parse the results based on what was included
-    const bars = rows.map(bar => {
+    const bars = await Promise.all(rows.map(async bar => {
       const result = { ...bar };
       
-      if (includeOptions.includes('hours') && bar.hours) {
-        result.hours = bar.hours.split(',').map(h => {
-          const [day_of_week, open_time, close_time, is_closed, crosses_midnight] = h.split(':');
-          return {
-            day_of_week: parseInt(day_of_week),
-            open_time: open_time === 'null' ? null : open_time,
-            close_time: close_time === 'null' ? null : close_time,
-            is_closed: is_closed === '1',
-            crosses_midnight: crosses_midnight === '1'
-          };
-        });
-      } else if (includeOptions.includes('hours')) {
-        result.hours = [];
+      if (includeOptions.includes('hours')) {
+        result.hours = await fetchBarHours(bar.id);
       }
       
       if (includeOptions.includes('tags') && bar.tags) {
@@ -388,7 +432,7 @@ async function getAllBars(req, res) {
       }
       
       return result;
-    });
+    }));
     
     // Calculate pagination metadata
     const totalPages = Math.ceil(totalItems / limitNumber);
@@ -439,13 +483,6 @@ async function getBar(req, res) {
     let selectClauses = ['b.*'];
     
     // Add joins and select clauses based on include parameters
-    if (includeOptions.includes('hours')) {
-      joinClauses.push('LEFT JOIN bar_hours bh ON b.id = bh.bar_id');
-      selectClauses.push(`GROUP_CONCAT(
-        DISTINCT CONCAT(bh.day_of_week, ':', bh.open_time, ':', bh.close_time, ':', bh.is_closed, ':', bh.crosses_midnight)
-      ) as hours`);
-    }
-    
     if (includeOptions.includes('tags')) {
       joinClauses.push('LEFT JOIN bar_tag_assignments bt ON b.id = bt.bar_id');
       joinClauses.push('LEFT JOIN bar_tags t ON bt.tag_id = t.id');
@@ -484,19 +521,8 @@ async function getBar(req, res) {
     const result = { ...bar };
     
     // Parse the results based on what was included
-    if (includeOptions.includes('hours') && bar.hours) {
-      result.hours = bar.hours.split(',').map(h => {
-        const [day_of_week, open_time, close_time, is_closed, crosses_midnight] = h.split(':');
-        return {
-          day_of_week: parseInt(day_of_week),
-          open_time: open_time === 'null' ? null : open_time,
-          close_time: close_time === 'null' ? null : close_time,
-          is_closed: is_closed === '1',
-          crosses_midnight: crosses_midnight === '1'
-        };
-      });
-    } else if (includeOptions.includes('hours')) {
-      result.hours = [];
+    if (includeOptions.includes('hours')) {
+      result.hours = await fetchBarHours(barId);
     }
     
     if (includeOptions.includes('tags') && bar.tags) {
@@ -972,31 +998,7 @@ async function getBarHours(req, res) {
       return res.status(404).json({ error: 'Bar not found' });
     }
     
-    // Get all hours for the bar, ordered by day_of_week
-    const hoursSql = `
-      SELECT 
-        id,
-        day_of_week,
-        open_time,
-        close_time,
-        is_closed,
-        crosses_midnight
-      FROM bar_hours 
-      WHERE bar_id = ? 
-      ORDER BY day_of_week
-    `;
-    
-    const [hoursRows] = await db.execute(hoursSql, [barId]);
-    
-    // Format the hours data
-    const hours = hoursRows.map(hour => ({
-      id: hour.id,
-      day_of_week: hour.day_of_week,
-      open_time: hour.open_time,
-      close_time: hour.close_time,
-      is_closed: Boolean(hour.is_closed),
-      crosses_midnight: Boolean(hour.crosses_midnight)
-    }));
+    const hours = await fetchBarHours(barId);
     
     return res.json({
       success: true,

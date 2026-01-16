@@ -11,6 +11,7 @@ const eventTagsRouter = require('./routes/event-tags');
 const barsRouter = require('./routes/bars');
 const usersRouter = require('./routes/users');
 const eventsRouter = require('./routes/events');
+const appUsersRouter = require('./routes/app-users');
 
 // enable CORS for the frontend. Prefer configuring the real frontend origin
 // via the FRONTEND_URL environment variable. Falls back to localhost for dev.
@@ -29,6 +30,8 @@ app.use('/event-tags', eventTagsRouter);
 app.use('/bars', barsRouter);
 // mount users routes at /users
 app.use('/users', usersRouter);
+// mount app user routes at /app-users
+app.use('/app-users', appUsersRouter);
 // mount events routes at /events
 app.use('/events', eventsRouter);
 

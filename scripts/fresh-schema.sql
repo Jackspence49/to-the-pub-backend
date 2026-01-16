@@ -164,6 +164,23 @@ CREATE TABLE web_users (
     INDEX idx_web_users_reset_token (reset_token)
 );
 
+-- App users table - customer-facing accounts for the mobile app
+CREATE TABLE app_users (
+    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255),
+    phone VARCHAR(30),
+    last_login TIMESTAMP NULL DEFAULT NULL,
+    reset_token VARCHAR(255) DEFAULT NULL,
+    reset_token_expires TIMESTAMP NULL DEFAULT NULL,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_app_users_email (email),
+    INDEX idx_app_users_active (is_active)
+);
+
 -- ===========================
 -- VIEWS FOR QUERIES
 -- ===========================

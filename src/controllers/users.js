@@ -86,7 +86,8 @@ async function login(req, res) {
     const jwtPayload = {
       userId: user.id,
       email: user.email,
-      role: user.role
+      role: user.role,
+      userType: 'web_user'
     };
 
     const token = jwt.sign(jwtPayload, process.env.JWT_SECRET, { 
