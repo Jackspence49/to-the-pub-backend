@@ -304,6 +304,7 @@ async function getEventInstances(req, res) {
       'COALESCE(ei.custom_title, e.title) as title',
       'COALESCE(ei.custom_external_link, e.external_link) as external_link',
       'COALESCE(ei.custom_event_tag_id, e.event_tag_id) as event_tag_id',
+      'COALESCE(ct.name, et.name) as event_tag_name',
       'e.bar_id',
       'b.name as bar_name',
       'b.address_street',
@@ -322,6 +323,8 @@ async function getEventInstances(req, res) {
       FROM event_instances ei
       INNER JOIN events e ON ei.event_id = e.id
       INNER JOIN bars b ON e.bar_id = b.id
+      LEFT JOIN event_tags et ON e.event_tag_id = et.id
+      LEFT JOIN event_tags ct ON ei.custom_event_tag_id = ct.id
       WHERE e.is_active = 1 AND b.is_active = 1
     `;
     
@@ -563,7 +566,7 @@ async function getEventInstance(req, res) {
 
     const instance = rows[0];
 
-    // Set tag information
+    // Set tag information (include tag name)
     instance.tag = instance.tag_id ? {
       id: instance.tag_id,
       name: instance.tag_name
