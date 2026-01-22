@@ -317,6 +317,26 @@ async function getEventInstances(req, res) {
       'b.longitude'
     ];
 
+    const effectiveStartTimeExpr = 'COALESCE(ei.custom_start_time, e.start_time)';
+    const effectiveEndTimeExpr = 'COALESCE(ei.custom_end_time, e.end_time)';
+    const effectiveCrossesMidnightExpr = 'COALESCE(ei.crosses_midnight, e.crosses_midnight)';
+    const upcomingPredicate = `(
+      ei.date > CURDATE() OR 
+      (
+        ei.date = CURDATE() AND (
+          ${effectiveStartTimeExpr} >= CURTIME() OR 
+          ${effectiveEndTimeExpr} > CURTIME() OR 
+          (${effectiveCrossesMidnightExpr} = 1 AND ${effectiveStartTimeExpr} <= CURTIME())
+        )
+      )
+    )`;
+    const inProgressPredicate = `(
+      ei.date = CURDATE() AND 
+      ${effectiveStartTimeExpr} <= CURTIME() AND (
+        ${effectiveEndTimeExpr} > CURTIME() OR 
+        (${effectiveCrossesMidnightExpr} = 1 AND ${effectiveStartTimeExpr} <= CURTIME())
+      )
+    )`;
     let selectParams = [];
     
     let fromClause = `
@@ -381,7 +401,7 @@ async function getEventInstances(req, res) {
 
     // Add upcoming filter
     if (upcoming === 'true') {
-      whereClauses.push('ei.date >= CURDATE()');
+      whereClauses.push(upcomingPredicate);
     }
 
     // Don't show cancelled instances
@@ -392,9 +412,14 @@ async function getEventInstances(req, res) {
     // Construct query
     let selectSql = `SELECT ${selectClauses.join(', ')} ${fromClause}${whereSql}`;
     if (userLat !== null && userLon !== null) {
-      selectSql += ` ORDER BY ei.date ASC, start_time ASC, distance_${distanceUnit} ASC`;
+      selectSql += ` ORDER BY 
+        ei.date ASC,
+        CASE WHEN ${inProgressPredicate} THEN 0 ELSE 1 END ASC,
+        CASE WHEN ${inProgressPredicate} THEN distance_${distanceUnit} ELSE NULL END ASC,
+        ${effectiveStartTimeExpr} ASC,
+        distance_${distanceUnit} ASC`;
     } else {
-      selectSql += ` ORDER BY ei.date ASC, start_time ASC`;
+      selectSql += ` ORDER BY ei.date ASC, ${effectiveStartTimeExpr} ASC`;
     }
 
     // Add pagination
@@ -488,13 +513,34 @@ async function getEvent(req, res) {
     delete event.tag_name;
 
     // Get upcoming instances (next 10)
+    const upcomingInstancesPredicate = `(
+      ei.date > CURDATE() OR 
+      (
+        ei.date = CURDATE() AND (
+          COALESCE(ei.custom_start_time, e.start_time) >= CURTIME() OR 
+          COALESCE(ei.custom_end_time, e.end_time) > CURTIME() OR 
+          (COALESCE(ei.crosses_midnight, e.crosses_midnight) = 1 AND COALESCE(ei.custom_start_time, e.start_time) <= CURTIME())
+        )
+      )
+    )`;
+
     const instancesSql = `
-      SELECT id as instance_id, date, is_cancelled, 
-             custom_start_time, custom_end_time, custom_description, custom_image_url,
-             custom_title, custom_event_tag_id, custom_external_link
-      FROM event_instances 
-      WHERE event_id = ? AND date >= CURDATE() 
-      ORDER BY date ASC 
+      SELECT 
+        ei.id as instance_id,
+        ei.date,
+        ei.is_cancelled,
+        ei.custom_start_time,
+        ei.custom_end_time,
+        ei.custom_description,
+        ei.custom_image_url,
+        ei.custom_title,
+        ei.custom_event_tag_id,
+        ei.custom_external_link
+      FROM event_instances ei
+      INNER JOIN events e ON ei.event_id = e.id
+      WHERE ei.event_id = ?
+        AND ${upcomingInstancesPredicate}
+      ORDER BY ei.date ASC, COALESCE(ei.custom_start_time, e.start_time) ASC
       LIMIT 10
     `;
     const [instanceRows] = await db.query(instancesSql, [eventId]);
@@ -525,6 +571,7 @@ async function getEventInstance(req, res) {
       SELECT 
         ei.id as instance_id,
         ei.event_id,
+        e.bar_id as bar_id,
         ei.date,
         ei.is_cancelled,
         COALESCE(ei.custom_start_time, e.start_time) as start_time,
