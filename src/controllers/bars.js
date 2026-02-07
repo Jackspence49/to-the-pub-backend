@@ -215,17 +215,33 @@ async function createBar(req, res) {
  * - radius: maximum distance from user location (requires lat/lon)
  * - unit: distance unit - 'km' (kilometers, default) or 'miles'
  * - page: page number for pagination (default: 1, minimum: 1)
- * - limit: number of results per page (default: 50, minimum: 1, maximum: 100)
+ * - limit: number of results per page (default: 20, minimum: 10, maximum: 100)
+ * - offset: alternative to page (0-indexed). If provided with page, offset takes precedence
  */
 async function getAllBars(req, res) {
   try {
-    const { include, tag, open_now, lat, lon, radius, unit, page, limit } = req.query;
+    const { include, tag, open_now, lat, lon, radius, unit, page, limit, offset } = req.query;
     const includeOptions = include ? include.split(',').map(i => i.trim().toLowerCase()) : [];
     
     // Validate and set pagination parameters
     let pageNumber = 1;
-    let limitNumber = 50; // Default limit
-    
+    let limitNumber = 20; // Default limit per requirements
+    let offsetNumber = null;
+
+    if (limit !== undefined) {
+      limitNumber = parseInt(limit);
+      if (isNaN(limitNumber) || limitNumber < 10 || limitNumber > 100) {
+        return res.status(400).json({ error: 'Limit must be between 10 and 100.' });
+      }
+    }
+
+    if (offset !== undefined) {
+      offsetNumber = parseInt(offset);
+      if (isNaN(offsetNumber) || offsetNumber < 0) {
+        return res.status(400).json({ error: 'Offset must be a non-negative integer.' });
+      }
+    }
+
     if (page !== undefined) {
       pageNumber = parseInt(page);
       if (isNaN(pageNumber) || pageNumber < 1) {
@@ -233,14 +249,7 @@ async function getAllBars(req, res) {
       }
     }
     
-    if (limit !== undefined) {
-      limitNumber = parseInt(limit);
-      if (isNaN(limitNumber) || limitNumber < 1 || limitNumber > 100) {
-        return res.status(400).json({ error: 'Limit must be between 1 and 100.' });
-      }
-    }
-    
-    const offset = (pageNumber - 1) * limitNumber;
+    const effectiveOffset = offsetNumber !== null ? offsetNumber : (pageNumber - 1) * limitNumber;
     
     // Validate lat/lon parameters if provided
     let userLat = null;
@@ -392,7 +401,7 @@ async function getAllBars(req, res) {
     
     // Add pagination to main query
     selectSql += ` LIMIT ? OFFSET ?`;
-    params.push(limitNumber, offset);
+    params.push(limitNumber, effectiveOffset);
     
     const [rows] = await db.query(selectSql, params);
     
@@ -436,20 +445,26 @@ async function getAllBars(req, res) {
     
     // Calculate pagination metadata
     const totalPages = Math.ceil(totalItems / limitNumber);
-    const hasNextPage = pageNumber < totalPages;
-    const hasPrevPage = pageNumber > 1;
+    const effectivePage = Math.floor(effectiveOffset / limitNumber) + 1;
+    const hasNextPage = effectivePage < totalPages;
+    const hasPrevPage = effectivePage > 1;
+    const nextPage = hasNextPage ? effectivePage + 1 : null;
+    const prevPage = hasPrevPage ? effectivePage - 1 : null;
     
     return res.json({ 
       success: true, 
       data: bars,
       meta: {
-        count: bars.length,
-        total: totalItems,
-        page: pageNumber,
-        limit: limitNumber,
-        totalPages: totalPages,
-        hasNextPage: hasNextPage,
-        hasPrevPage: hasPrevPage,
+        pagination: {
+          current_page: effectivePage,
+          per_page: limitNumber,
+          total: totalItems,
+          total_pages: totalPages,
+          has_next_page: hasNextPage,
+          has_previous_page: hasPrevPage,
+          next_page: nextPage,
+          prev_page: prevPage
+        },
         filters: { tag, open_now, radius: radiusValue, unit: distanceUnit },
         included: includeOptions,
         location: userLat !== null && userLon !== null ? { 
