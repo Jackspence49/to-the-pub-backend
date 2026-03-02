@@ -71,16 +71,20 @@ async function login(req, res) {
     
     const [rows] = await db.execute(selectSql, [email]);
     if (!rows || rows.length === 0) {
+      req.recordFailedLogin?.();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const user = rows[0];
-    
+
     // Compare the received password with the stored hashed password using bcrypt.compare()
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) {
+      req.recordFailedLogin?.();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    req.clearFailedLogins?.();
 
     // Create JWT token with user ID and role information
     const jwtPayload = {

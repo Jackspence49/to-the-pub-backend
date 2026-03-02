@@ -1,19 +1,12 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
 const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
 const { ensureAppUserToken } = require('../middleware/token');
 const { buildToken } = require('../utils/token');
 
-//Forgot passord flow:
-//1. User submits email for password reset
-//2. Generate a secure, single-use token with an expiration time (e.g., 1 hour)
-//3. Send a link containing the token to the user's email address
-//4. When the user clicks the link, verify the token and allow them to set a new password
-
-
+// Register function for app users
 async function register(req, res) {
   // 1. Destructure with default empty object
   const { email, password, full_name, phone } = req.body || {};
@@ -89,12 +82,14 @@ async function login(req, res) {
   const { email, password } = req.body || {};
 
   if (!email || !password) {
-    return res.status(400).json({ error: 'email and password are required' });
+    return res.status(400).json({ error: 'Email and password are required' });
   }
 
   const normalizedEmail = normalizeEmail(email);
 
   try {
+    // 1. Check for Rate Limiting here (e.g., if (await isRateLimited(email)) return 429...)
+
     const selectSql = `
       SELECT id, email, password_hash, full_name, is_active
       FROM app_users
@@ -103,23 +98,32 @@ async function login(req, res) {
     `;
 
     const [rows] = await db.execute(selectSql, [normalizedEmail]);
-
-    if (!rows || rows.length === 0) {
-      return res.status(401).json({ error: 'Email address not found' });
-    }
-
     const user = rows[0];
+
+    // 2. Generic Error Message to prevent enumeration
+    const genericError = 'Invalid email address or password';
+
+    if (!user) {
+      // Still need to call bcrypt to prevent time-based attacks
+      await bcrypt.compare(password, 'some_dummy_hash');
+      return res.status(401).json({ error: genericError });
+    }
 
     if (!user.is_active) {
       return res.status(403).json({ error: 'Account is inactive' });
     }
 
+    // 3. Password Check
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      // 4. Increment failed login attempts count here...
+      return res.status(401).json({ error: genericError });
     }
 
+    // 5. Success Path
     await db.execute('UPDATE app_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
+    
+    // 6. Reset failed login attempts here...
 
     const token = buildToken({ id: user.id, email: user.email });
 
@@ -132,7 +136,7 @@ async function login(req, res) {
       token
     });
   } catch (err) {
-    console.error('Error logging in app user:', err.message || err);
+    console.error('Error logging in app user:', err);
     return res.status(500).json({ error: 'Failed to login' });
   }
 }
@@ -320,6 +324,14 @@ async function resetPassword(req, res) {
     return res.status(500).json({ error: 'Failed to reset password' });
   }
 }
+
+
+//Forgot passord flow:
+//1. User submits email for password reset
+//2. Generate a secure, single-use token with an expiration time (e.g., 1 hour)
+//3. Send a link containing the token to the user's email address
+//4. When the user clicks the link, verify the token and allow them to set a new password
+
 
 module.exports = {
   register,

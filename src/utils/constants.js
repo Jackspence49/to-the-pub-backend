@@ -1,5 +1,3 @@
-
-
 // App user management constants
  const MIN_PASSWORD_LENGTH = 12;
  const SALT_ROUNDS = 12;
