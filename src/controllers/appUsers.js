@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
@@ -140,8 +141,9 @@ async function login(req, res) {
 
 // Get profile function for app users
 async function getProfile(req, res) {
+  // 1. Authenticate Request
   if (!ensureAppUserToken(req, res)) {
-    return;
+    return; 
   }
 
   try {
@@ -152,6 +154,7 @@ async function getProfile(req, res) {
       LIMIT 1
     `;
 
+    // 2. Fetch User Data based on token ID
     const [rows] = await db.execute(selectSql, [req.user.userId]);
 
     if (!rows || rows.length === 0) {
@@ -160,55 +163,74 @@ async function getProfile(req, res) {
 
     const user = rows[0];
 
+    // 3. Return Sanitized Data
     return res.status(200).json({
       success: true,
       data: {
         id: user.id,
         email: user.email,
-        full_name: user.full_name,
-        phone: user.phone,
+        // Use empty string fallback for null values to keep frontend code clean
+        full_name: user.full_name || '', 
+        phone: user.phone || '',
         last_login: user.last_login,
         created_at: user.created_at
       }
     });
   } catch (err) {
-    console.error('Error fetching app user profile:', err.message || err);
+    console.error('Error fetching app user profile:', err);
     return res.status(500).json({ error: 'Failed to fetch profile' });
   }
 }
 
 // Update profile function for app users
 async function updateProfile(req, res) {
+  // 1. Authenticate Request
   if (!ensureAppUserToken(req, res)) {
     return;
   }
 
   const { full_name, phone, new_password } = req.body || {};
 
+  // 2. Ensure at least one field is provided
   if (full_name === undefined && phone === undefined && !new_password) {
     return res.status(400).json({ error: 'No profile fields supplied' });
   }
 
-  if (new_password && new_password.length < MIN_PASSWORD_LENGTH) {
-    return res.status(422).json({ error: 'password must be at least 8 characters' });
+  // 3. Validate New Password Complexity
+  if (new_password && !isValidPassword(new_password)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  }
+
+  // 4. Validate and Format Phone Number
+  let formattedPhone = phone;
+  if (phone !== undefined) {
+    if (phone === null) {
+      formattedPhone = null;
+    } else {
+      formattedPhone = formatPhoneForDB(phone);
+      if (!isValidPhone(formattedPhone)) {
+        return res.status(400).json({ error: 'Invalid phone number format. Please use E.164 format (e.g., +15551234567)' });
+      }
+    }
   }
 
   try {
     const updates = [];
     const params = [];
 
+    // Dynamically build SQL SET clause
     if (full_name !== undefined) {
       updates.push('full_name = ?');
       params.push(full_name || null);
     }
 
-    if (phone !== undefined) {
+    if (formattedPhone !== undefined) {
       updates.push('phone = ?');
-      params.push(phone || null);
+      params.push(formattedPhone);
     }
 
     if (new_password) {
-      const newHash = await bcrypt.hash(new_password, SALT_ROUNDS);
+      const newHash = await bcrypt.hash(new_password, 12);
       updates.push('password_hash = ?');
       params.push(newHash);
     }
@@ -223,10 +245,11 @@ async function updateProfile(req, res) {
 
     params.push(req.user.userId);
 
+    // 5. Execute Update
     const [result] = await db.execute(updateSql, params);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'App user not found' });
+      return res.status(404).json({ error: 'App user not found or inactive' });
     }
 
     return res.status(200).json({
@@ -234,11 +257,16 @@ async function updateProfile(req, res) {
       message: 'Profile updated successfully'
     });
   } catch (err) {
-    console.error('Error updating app user profile:', err.message || err);
+    console.error('Error updating app user profile:', err);
+    
+    // 6. Handle Database Constraints (e.g., Duplicate Phone)
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Phone number already registered' });
+    }
+    
     return res.status(500).json({ error: 'Failed to update profile' });
   }
 }
-
 
 // Forgot password function for app users
 async function forgotPassword(req, res) {
@@ -277,7 +305,6 @@ async function forgotPassword(req, res) {
     return res.status(500).json({ error: 'Failed to initiate password reset' });
   }
 }
-
 
 // Reset password function for app users
 async function resetPassword(req, res) {

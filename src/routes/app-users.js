@@ -8,7 +8,7 @@ const loginRateLimiter = require('../middleware/loginRateLimiter');
 router.post('/register', appUsersController.register);
 router.post('/login', loginRateLimiter, appUsersController.login);
 router.post('/forgot-password', appUsersController.forgotPassword);
-router.post('/reset-password', appUsersController.resetPassword);32
+router.post('/reset-password', appUsersController.resetPassword);
 
 // Protected routes
 router.get('/me', authenticateToken, appUsersController.getProfile);
