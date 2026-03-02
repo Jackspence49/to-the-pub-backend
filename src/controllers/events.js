@@ -236,9 +236,37 @@ async function getEventInstances(req, res) {
       lon,
       radius,
       unit,
-      page = 1, 
-      limit = 20 
+      page,
+      limit,
+      offset
     } = req.query;
+
+    let pageNum = 1;
+    let limitNum = 20;
+    let offsetNum = null;
+
+    if (limit !== undefined) {
+      limitNum = Number.parseInt(limit, 10);
+      if (Number.isNaN(limitNum) || limitNum < 10 || limitNum > 100) {
+        return res.status(400).json({ error: 'limit must be between 10 and 100.' });
+      }
+    }
+
+    if (offset !== undefined) {
+      offsetNum = Number.parseInt(offset, 10);
+      if (Number.isNaN(offsetNum) || offsetNum < 0) {
+        return res.status(400).json({ error: 'offset must be a non-negative integer.' });
+      }
+    }
+
+    if (page !== undefined) {
+      pageNum = Number.parseInt(page, 10);
+      if (Number.isNaN(pageNum) || pageNum < 1) {
+        return res.status(400).json({ error: 'page must be a positive integer starting from 1.' });
+      }
+    }
+
+    const effectiveOffset = offsetNum !== null ? offsetNum : (pageNum - 1) * limitNum;
 
     // Validate date formats if provided
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -423,11 +451,8 @@ async function getEventInstances(req, res) {
     }
 
     // Add pagination
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const offset = (pageNum - 1) * limitNum;
     selectSql += ` LIMIT ? OFFSET ?`;
-    const selectQueryParams = [...selectParams, ...whereParams, limitNum, offset];
+    const selectQueryParams = [...selectParams, ...whereParams, limitNum, effectiveOffset];
     const [rows] = await db.query(selectSql, selectQueryParams);
 
     // Get total count for pagination metadata
@@ -435,16 +460,27 @@ async function getEventInstances(req, res) {
     const countParams = [...whereParams];
     const [countRows] = await db.query(countSql, countParams);
     const totalCount = countRows[0].total;
+    const totalPages = Math.ceil(totalCount / limitNum);
+    const effectivePage = Math.floor(effectiveOffset / limitNum) + 1;
+    const hasNextPage = effectivePage < totalPages;
+    const hasPreviousPage = effectivePage > 1;
+    const nextPage = hasNextPage ? effectivePage + 1 : null;
+    const prevPage = hasPreviousPage ? effectivePage - 1 : null;
 
     return res.json({ 
       success: true, 
       data: rows,
       meta: {
-        count: rows.length,
-        total: totalCount,
-        page: pageNum,
-        limit: limitNum,
-        total_pages: Math.ceil(totalCount / limitNum),
+        pagination: {
+          current_page: effectivePage,
+          per_page: limitNum,
+          total: totalCount,
+          total_pages: totalPages,
+          has_next_page: hasNextPage,
+          has_previous_page: hasPreviousPage,
+          next_page: nextPage,
+          prev_page: prevPage
+        },
         filters: { 
           bar_id, 
           date_from, 
