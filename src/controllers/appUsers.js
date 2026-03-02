@@ -88,8 +88,6 @@ async function login(req, res) {
   const normalizedEmail = normalizeEmail(email);
 
   try {
-    // 1. Check for Rate Limiting here (e.g., if (await isRateLimited(email)) return 429...)
-
     const selectSql = `
       SELECT id, email, password_hash, full_name, is_active
       FROM app_users
@@ -116,14 +114,13 @@ async function login(req, res) {
     // 3. Password Check
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
-      // 4. Increment failed login attempts count here...
+      req.recordFailedLogin?.();
       return res.status(401).json({ error: genericError });
     }
 
     // 5. Success Path
     await db.execute('UPDATE app_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
-    
-    // 6. Reset failed login attempts here...
+    req.clearFailedLogins?.();
 
     const token = buildToken({ id: user.id, email: user.email });
 
