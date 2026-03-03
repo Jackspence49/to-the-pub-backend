@@ -344,4 +344,47 @@ async function resetPassword(req, res) {
   }
 }
 
-module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword };
+/**
+ * Invite a new web user (super_admin only)
+ * Payload expected: { email, password, full_name?, role? }
+ * role defaults to 'venue_owner' if not provided.
+ * Cannot create another super_admin via this endpoint.
+ */
+async function inviteUser(req, res) {
+  const payload = req.body;
+  if (!payload || !payload.email || !payload.password) {
+    return res.status(400).json({ error: 'email and password are required' });
+  }
+
+  const validRoles = ['venue_owner', 'staff', 'manager', 'user'];
+  const role = payload.role || 'venue_owner';
+  if (!validRoles.includes(role)) {
+    return res.status(400).json({ error: `role must be one of: ${validRoles.join(', ')}` });
+  }
+
+  const email = payload.email.trim().toLowerCase();
+  const fullName = payload.full_name || null;
+
+  if (payload.password.length < 8) {
+    return res.status(400).json({ error: 'password must be at least 8 characters' });
+  }
+
+  const passwordHash = await bcrypt.hash(payload.password, 10);
+  const userId = uuidv4();
+
+  try {
+    await db.execute(
+      'INSERT INTO web_users (id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?)',
+      [userId, email, passwordHash, fullName, role]
+    );
+    return res.status(201).json({ data: { id: userId, email, full_name: fullName, role } });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    console.error('Error inviting user:', err.message || err);
+    return res.status(500).json({ error: 'Failed to create user' });
+  }
+}
+
+module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword, inviteUser };

@@ -16,6 +16,8 @@ router.post('/reset-password', usersController.resetPassword);
 // Protected routes (authentication required)
 // POST /users -> signup (creates a super_admin user for this form)
 router.post('/', authenticateToken, usersController.signup);
+// POST /users/invite -> create a non-super_admin web user (super_admin only)
+router.post('/invite', authenticateToken, requireAdmin, usersController.inviteUser);
 // GET /users/profile -> get current user profile
 router.get('/profile', authenticateToken, usersController.getProfile);
 // PUT /users/profile -> update current user profile
