@@ -1,10 +1,11 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
-const { 
-  generateEventInstances, 
-  validateRecurrenceData, 
-  getRecurrenceDescription 
+const {
+  generateEventInstances,
+  validateRecurrenceData,
+  getRecurrenceDescription
 } = require('../utils/eventRecurrence');
+const { checkBarAccess } = require('../middleware/auth');
 
 /**
  * POST /events
@@ -140,6 +141,12 @@ async function createEvent(req, res) {
     if (barRows.length === 0) {
       await conn.rollback();
       return res.status(404).json({ error: 'Bar not found or inactive' });
+    }
+
+    const hasAccess = await checkBarAccess(req.user.userId, payload.bar_id, req.user.role);
+    if (!hasAccess) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Access denied to this bar.' });
     }
 
     // Create the master event
@@ -680,11 +687,12 @@ async function updateEventInstance(req, res) {
 
     // Check if instance exists and gather current values
     const checkSql = `
-      SELECT 
-        ei.id, 
-        ei.event_id, 
-        ei.custom_start_time, 
+      SELECT
+        ei.id,
+        ei.event_id,
+        ei.custom_start_time,
         ei.custom_end_time,
+        e.bar_id,
         e.start_time as master_start_time,
         e.end_time as master_end_time
       FROM event_instances ei
@@ -698,6 +706,9 @@ async function updateEventInstance(req, res) {
     }
 
     const instanceMeta = checkRows[0];
+
+    const hasAccess = await checkBarAccess(req.user.userId, instanceMeta.bar_id, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
     const updates = [];
     const params = [];
     const appendUpdate = (clause, value) => {
@@ -887,7 +898,7 @@ async function updateEvent(req, res) {
 
     // Check if event exists and is active, and get current values
     const checkSql = `
-      SELECT id, title, description, event_tag_id, external_link, image_url,
+      SELECT id, bar_id, title, description, event_tag_id, external_link, image_url,
              recurrence_pattern, recurrence_days, start_date, recurrence_end_date,
              recurrence_end_occurrences, start_time, end_time, crosses_midnight,
              is_active
@@ -900,6 +911,9 @@ async function updateEvent(req, res) {
     }
 
     const currentEvent = checkRows[0];
+
+    const hasAccess = await checkBarAccess(userId, currentEvent.bar_id, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
 
     const normalizeDateValue = (value) => {
       if (!value) {
@@ -1277,12 +1291,15 @@ async function deleteEvent(req, res) {
     const userId = req.user.userId; // From JWT
 
     // Check if event exists and is active
-    const checkSql = `SELECT id, title FROM events WHERE id = ? AND is_active = 1`;
+    const checkSql = `SELECT id, bar_id, title FROM events WHERE id = ? AND is_active = 1`;
     const [checkRows] = await db.execute(checkSql, [eventId]);
 
     if (!checkRows || checkRows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
+
+    const hasAccess = await checkBarAccess(userId, checkRows[0].bar_id, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
 
     // Soft delete the event
     const deleteSql = `UPDATE events SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;

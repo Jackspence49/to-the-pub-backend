@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const usersController = require('../controllers/users');
-const { authenticateToken } = require('../utils/auth');
+const userBarsController = require('../controllers/userBars');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const loginRateLimiter = require('../middleware/loginRateLimiter');
 
 // Public routes (no authentication required)
@@ -21,5 +22,13 @@ router.get('/profile', authenticateToken, usersController.getProfile);
 router.put('/profile', authenticateToken, usersController.updateProfile);
 // DELETE /users/:id -> delete user by UUID
 router.delete('/:id', authenticateToken, usersController.deleteUser);
+
+// Bar association routes
+// POST /users/:userId/bars/:barId -> assign a bar to a user (super_admin only)
+router.post('/:userId/bars/:barId', authenticateToken, requireAdmin, userBarsController.assignUserToBar);
+// DELETE /users/:userId/bars/:barId -> unassign a bar from a user (super_admin only)
+router.delete('/:userId/bars/:barId', authenticateToken, requireAdmin, userBarsController.unassignUserFromBar);
+// GET /users/:userId/bars -> get bars assigned to a user (super_admin or own user)
+router.get('/:userId/bars', authenticateToken, userBarsController.getUserBars);
 
 module.exports = router;

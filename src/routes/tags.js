@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const tagsController = require('../controllers/tags');
-const { authenticateToken } = require('../utils/auth');
+const { authenticateToken } = require('../middleware/auth');
 
 // Public routes (read operations)
 // GET /tags -> list all tags

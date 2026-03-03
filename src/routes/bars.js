@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const barsController = require('../controllers/bars');
 const eventsController = require('../controllers/events');
-const { authenticateToken, optionalAuth } = require('../utils/auth');
+const userBarsController = require('../controllers/userBars');
+const { authenticateToken, optionalAuth, requireAdmin } = require('../middleware/auth');
 
 // Public routes (read operations)
 // GET /bars -> list all bars with optional filtering and includes (optional auth for future features)
@@ -32,5 +33,7 @@ router.delete('/:id', authenticateToken, barsController.deleteBar);
 router.post('/:barId/tags/:tagId', authenticateToken, barsController.addTagToBar);
 // DELETE /bars/:barId/tags/:tagId -> remove a tag from a bar
 router.delete('/:barId/tags/:tagId', authenticateToken, barsController.removeTagFromBar);
+// GET /bars/:barId/users -> list users assigned to this bar (super_admin only)
+router.get('/:barId/users', authenticateToken, requireAdmin, userBarsController.getBarUsers);
 
 module.exports = router;

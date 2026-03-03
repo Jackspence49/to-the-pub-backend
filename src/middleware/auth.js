@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const db = require('../utils/db');
 require('dotenv').config();
 
 /**
@@ -108,7 +109,32 @@ const optionalAuth = (req, res, next) => {
     next();
 };
 
+/**
+ * Middleware: blocks non-super_admin users with 403
+ */
+const requireAdmin = (req, res, next) => {
+    if (!req.user || req.user.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Access denied. Super admin required.' });
+    }
+    next();
+};
+
+/**
+ * Helper (async, not middleware): returns true if user has access to barId.
+ * super_admin always returns true; others are checked against web_user_bar_associations.
+ */
+const checkBarAccess = async (userId, barId, role) => {
+    if (role === 'super_admin') return true;
+    const [rows] = await db.execute(
+        'SELECT 1 FROM web_user_bar_associations WHERE user_id = ? AND bar_id = ?',
+        [userId, barId]
+    );
+    return rows.length > 0;
+};
+
 module.exports = {
     authenticateToken,
-    optionalAuth
+    optionalAuth,
+    requireAdmin,
+    checkBarAccess
 };

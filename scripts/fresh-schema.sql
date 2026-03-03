@@ -164,6 +164,22 @@ CREATE TABLE web_users (
     INDEX idx_web_users_reset_token (reset_token)
 );
 
+-- Association table between web_users and bars (for access control)
+CREATE TABLE web_user_bar_associations (
+    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+    user_id CHAR(36) NOT NULL,
+    bar_id CHAR(36) NOT NULL,
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    assigned_by CHAR(36),
+
+    UNIQUE KEY unique_user_bar (user_id, bar_id),
+    FOREIGN KEY (user_id) REFERENCES web_users(id) ON DELETE CASCADE,
+    FOREIGN KEY (bar_id) REFERENCES bars(id) ON DELETE CASCADE,
+    FOREIGN KEY (assigned_by) REFERENCES web_users(id) ON DELETE SET NULL,
+    INDEX idx_user_bar_user (user_id),
+    INDEX idx_user_bar_bar (bar_id)
+);
+
 -- App users table - customer-facing accounts for the mobile app
 CREATE TABLE app_users (
     id CHAR(36) PRIMARY KEY DEFAULT (UUID()),

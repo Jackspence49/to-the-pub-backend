@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const appUsersController = require('../controllers/appUsers');
-const { authenticateToken } = require('../utils/auth');
+const { authenticateToken } = require('../middleware/auth');
 const loginRateLimiter = require('../middleware/loginRateLimiter');
 
 // Public routes

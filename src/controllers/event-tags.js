@@ -1,10 +1,7 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 
-/**
- * GET /event-tags
- * Returns all event tags from the database (id, name, time created).
- */
+// Get all event tags (public route)
 async function getAllEventTags(req, res) {
   try {
     const [rows] = await db.query('SELECT id, name, created_at FROM event_tags ORDER BY name');
@@ -15,32 +12,32 @@ async function getAllEventTags(req, res) {
   }
 }
 
-/**
- * POST /event-tags
- * Creates a new event tag (protected route)
- * Expected payload: { name: string }
- */
+// Create a new event tag (protected route)
 async function createEventTag(req, res) {
   try {
-    const { name } = req.body;
+    //Clean Input
+    const name = req.body.name ? req.body.name.trim() : "";
     const userId = req.user.userId; // From JWT
     
+    //Validate Tag Name
     if (!name) {
       return res.status(400).json({ error: 'Tag name is required' });
     }
     
     const tagId = uuidv4();
+
+    // Insert new tag into database
     const insertSql = `INSERT INTO event_tags (id, name) VALUES (?, ?)`;
     
-    const [result] = await db.execute(insertSql, [
+    await db.execute(insertSql, [
       tagId,
-      name.trim()
+      name
     ]);
     
     return res.status(201).json({
       success: true,
       message: 'Event tag created successfully',
-      data: { id: tagId, name: name.trim() }
+      data: { id: tagId, name: name }
     });
   } catch (err) {
     console.error('Error creating event tag:', err.message || err);
@@ -54,10 +51,7 @@ async function createEventTag(req, res) {
   }
 }
 
-/**
- * PUT /event-tags/:id
- * Updates an existing event tag (protected route)
- */
+// Update an existing event tag (protected route)
 async function updateEventTag(req, res) {
   try {
     const tagId = req.params.id;
@@ -95,11 +89,7 @@ async function updateEventTag(req, res) {
   }
 }
 
-/**
- * DELETE /event-tags/:id
- * Deletes an event tag (protected route)
- * Only allows deletion if tag is not used by any events
- */
+// Delete an event tag (protected route)
 async function deleteEventTag(req, res) {
   try {
     const tagId = req.params.id;

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const eventTagsController = require('../controllers/event-tags');
-const { authenticateToken } = require('../utils/auth');
+const { authenticateToken } = require('../middleware/auth');
 
 // Public routes (read operations)
 // GET /event-tags -> list all event tags
