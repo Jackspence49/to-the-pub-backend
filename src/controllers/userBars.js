@@ -1,9 +1,6 @@
 const db = require('../utils/db');
 
-/**
- * POST /users/:userId/bars/:barId
- * Assigns a web user to a bar. super_admin only.
- */
+//Assigns a web user to a bar. super_admin only.
 async function assignUserToBar(req, res) {
   const { userId, barId } = req.params;
   const assignedBy = req.user.userId;
@@ -40,10 +37,7 @@ async function assignUserToBar(req, res) {
   }
 }
 
-/**
- * DELETE /users/:userId/bars/:barId
- * Removes a web user's assignment to a bar. super_admin only.
- */
+//Removes a web user's assignment to a bar. super_admin only.
 async function unassignUserFromBar(req, res) {
   const { userId, barId } = req.params;
 
@@ -68,10 +62,7 @@ async function unassignUserFromBar(req, res) {
   }
 }
 
-/**
- * GET /users/:userId/bars
- * Returns all bars assigned to a user. super_admin or the user themselves.
- */
+//Returns all bars assigned to a user. super_admin or the user themselves.
 async function getUserBars(req, res) {
   const { userId } = req.params;
   const requestingUser = req.user;
@@ -98,10 +89,7 @@ async function getUserBars(req, res) {
   }
 }
 
-/**
- * GET /bars/:barId/users
- * Returns all users assigned to a bar. super_admin only.
- */
+//Returns all users assigned to a bar. super_admin only.
 async function getBarUsers(req, res) {
   const { barId } = req.params;
 

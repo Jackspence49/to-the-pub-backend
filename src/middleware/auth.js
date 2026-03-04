@@ -110,10 +110,10 @@ const optionalAuth = (req, res, next) => {
 };
 
 /**
- * Middleware: blocks non-super_admin users with 403
+ * Middleware: blocks non-admin users with 403
  */
 const requireAdmin = (req, res, next) => {
-    if (!req.user || req.user.role !== 'super_admin') {
+    if (!req.user || req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Access denied. Super admin required.' });
     }
     next();
@@ -121,10 +121,10 @@ const requireAdmin = (req, res, next) => {
 
 /**
  * Helper (async, not middleware): returns true if user has access to barId.
- * super_admin always returns true; others are checked against web_user_bar_associations.
+ * admin always returns true; others are checked against web_user_bar_associations.
  */
 const checkBarAccess = async (userId, barId, role) => {
-    if (role === 'super_admin') return true;
+    if (role === 'admin') return true;
     const [rows] = await db.execute(
         'SELECT 1 FROM web_user_bar_associations WHERE user_id = ? AND bar_id = ?',
         [userId, barId]

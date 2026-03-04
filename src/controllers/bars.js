@@ -69,8 +69,8 @@ const fetchBarHours = async barId => {
  * If close_time is earlier than open_time, crosses_midnight will be set to true.
  */
 async function createBar(req, res) {
-  if (!req.user || req.user.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Access denied. Only super admins can create bars.' });
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied. Only admins can create bars.' });
   }
 
   const payload = req.body;

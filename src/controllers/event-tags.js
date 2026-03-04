@@ -14,16 +14,15 @@ async function getAllEventTags(req, res) {
 
 // Create a new event tag (protected route)
 async function createEventTag(req, res) {
-  try {
     //Clean Input
     const name = req.body.name ? req.body.name.trim() : "";
-    const userId = req.user.userId; // From JWT
-    
-    //Validate Tag Name
+
+    // Validate input
     if (!name) {
       return res.status(400).json({ error: 'Tag name is required' });
     }
-    
+  
+  try {
     const tagId = uuidv4();
 
     // Insert new tag into database
@@ -122,13 +121,6 @@ async function deleteEventTag(req, res) {
     return res.status(500).json({ error: 'Failed to delete event tag' });
   }
 }
-
-
-
-
-
-
-
 
 
 module.exports = {

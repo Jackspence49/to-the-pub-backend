@@ -6,6 +6,7 @@ const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
 const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
 const { ensureAppUserToken } = require('../middleware/token');
 const { buildToken } = require('../utils/token');
+const { sendPasswordResetEmail } = require('../utils/email');
 
 // Register function for app users
 async function register(req, res) {
@@ -141,7 +142,7 @@ async function login(req, res) {
 
 // Get profile function for app users
 async function getProfile(req, res) {
-  // 1. Authenticate Request
+  // Authenticate Request
   if (!ensureAppUserToken(req, res)) {
     return; 
   }
@@ -184,24 +185,24 @@ async function getProfile(req, res) {
 
 // Update profile function for app users
 async function updateProfile(req, res) {
-  // 1. Authenticate Request
+  // Authenticate Request
   if (!ensureAppUserToken(req, res)) {
     return;
   }
 
   const { full_name, phone, new_password } = req.body || {};
 
-  // 2. Ensure at least one field is provided
+  // Ensure at least one field is provided
   if (full_name === undefined && phone === undefined && !new_password) {
     return res.status(400).json({ error: 'No profile fields supplied' });
   }
 
-  // 3. Validate New Password Complexity
+  // Validate New Password Complexity
   if (new_password && !isValidPassword(new_password)) {
     return res.status(400).json({ error: 'Password does not meet complexity requirements' });
   }
 
-  // 4. Validate and Format Phone Number
+  // Validate and Format Phone Number
   let formattedPhone = phone;
   if (phone !== undefined) {
     if (phone === null) {
@@ -272,6 +273,7 @@ async function updateProfile(req, res) {
 async function forgotPassword(req, res) {
   const { email } = req.body || {};
 
+  // Validate presence of email
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
@@ -279,28 +281,44 @@ async function forgotPassword(req, res) {
   const normalizedEmail = normalizeEmail(email);
 
   try {
-    const selectSql = `SELECT id FROM app_users WHERE email = ? AND is_active = 1 LIMIT 1`;
+    // 1. Find user by email and ensure they are active
+    const selectSql = `
+    SELECT id FROM app_users 
+    WHERE email = ? AND is_active = 1 
+    LIMIT 1
+    `;
     const [rows] = await db.execute(selectSql, [normalizedEmail]);
 
+    // 2. Always respond with success message to prevent email enumeration
     if (!rows || rows.length === 0) {
       return res.status(200).json({ success: true, message: 'If the account exists, a reset link has been sent.' });
     }
 
     const user = rows[0];
-    const resetToken = `${uuidv4()}-${Date.now()}`;
+    const resetToken = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 60 * 60 * 1000);
 
+    // 3. Store reset token and expiration in the database
     await db.execute(
       'UPDATE app_users SET reset_token = ?, reset_token_expires = ? WHERE id = ?',
       [resetToken, expires, user.id]
     );
 
+    // 4. Send password reset email (log error but do not fail the request)
+    try {
+      await sendPasswordResetEmail(normalizedEmail, resetToken);
+    } catch (emailErr) {
+      console.error('Error sending password reset email:', emailErr.message || emailErr);
+    }
+
+    // 5. Respond with generic success message
     return res.status(200).json({
       success: true,
-      message: 'Password reset initiated',
-      resetToken
+      message: 'If the account exists, a reset link has been sent.'
     });
-  } catch (err) {
+  } 
+  // 6. Log any unexpected errors and return generic message
+  catch (err) {
     console.error('Error initiating app user password reset:', err.message || err);
     return res.status(500).json({ error: 'Failed to initiate password reset' });
   }
@@ -310,15 +328,18 @@ async function forgotPassword(req, res) {
 async function resetPassword(req, res) {
   const { token, newPassword } = req.body || {};
 
+  //Validate presence of token and new password
   if (!token || !newPassword) {
     return res.status(400).json({ error: 'Token and new password are required' });
   }
 
-  if (newPassword.length < MIN_PASSWORD_LENGTH) {
-    return res.status(422).json({ error: 'Password must be at least 8 characters' });
+  //Validate new password complexity
+  if (newPassword.length < MIN_PASSWORD_LENGTH || !isValidPassword(newPassword)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
   }
 
   try {
+    // 1. Find user by token and ensure it's not expired
     const selectSql = `
       SELECT id FROM app_users
       WHERE reset_token = ? AND reset_token_expires > NOW()
@@ -327,13 +348,18 @@ async function resetPassword(req, res) {
 
     const [rows] = await db.execute(selectSql, [token]);
 
+    //2. Prevent timing attacks by always calling bcrypt, even if token is invalid
     if (!rows || rows.length === 0) {
+      await bcrypt.compare('some_dummy_hash', SALT_ROUNDS);
       return res.status(401).json({ error: 'Invalid or expired reset token' });
     }
 
     const user = rows[0];
+
+    // 3. Hash the new password
     const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
+    // 4. Update user's password and clear reset token
     const updateSql = `
       UPDATE app_users
       SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL
@@ -342,20 +368,15 @@ async function resetPassword(req, res) {
 
     await db.execute(updateSql, [newHash, user.id]);
 
-    return res.status(200).json({ success: true, message: 'Password reset successfully' });
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Password reset successfully' });
   } catch (err) {
-    console.error('Error resetting app user password:', err.message || err);
+    // 5. Log error and return generic message
+    console.error('Error resetting app user password:', err);
     return res.status(500).json({ error: 'Failed to reset password' });
   }
 }
-
-
-//Forgot passord flow:
-//1. User submits email for password reset
-//2. Generate a secure, single-use token with an expiration time (e.g., 1 hour)
-//3. Send a link containing the token to the user's email address
-//4. When the user clicks the link, verify the token and allow them to set a new password
-
 
 module.exports = {
   register,

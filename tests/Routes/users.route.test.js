@@ -31,7 +31,7 @@ describe('Users Routes Integration Tests', () => {
     mockUser = createMockUser({
       id: 'test-user-123',
       email: 'test@example.com',
-      role: 'super_admin'
+      role: 'admin'
     });
 
     validToken = createTestJWT({
@@ -72,7 +72,7 @@ describe('Users Routes Integration Tests', () => {
       expect(typeof response.body.data.id).toBe('string');
       expect(response.body.data).toHaveProperty('email', newUser.email);
       expect(response.body.data).toHaveProperty('full_name', newUser.full_name);
-      expect(response.body.data).toHaveProperty('role', 'super_admin');
+      expect(response.body.data).toHaveProperty('role', 'admin');
       expect(response.body.data).not.toHaveProperty('password');
     });
 
@@ -195,7 +195,7 @@ describe('Users Routes Integration Tests', () => {
         email: loginData.email,
         password_hash: 'hashed_password',
         full_name: 'John Doe',
-        role: 'super_admin'
+        role: 'admin'
       };
 
       // Mock successful password comparison
@@ -306,7 +306,7 @@ describe('Users Routes Integration Tests', () => {
         id: mockUser.id,
         email: mockUser.email,
         full_name: 'John Doe',
-        role: 'super_admin',
+        role: 'admin',
         created_at: new Date()
       };
 

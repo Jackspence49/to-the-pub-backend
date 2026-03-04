@@ -15,7 +15,7 @@ function createMockUser(overrides = {}) {
     email: 'test@example.com',
     password_hash: bcrypt.hashSync('testpassword123', 10),
     full_name: 'Test User',
-    role: 'super_admin',
+    role: 'admin',
     created_at: new Date(),
     updated_at: new Date()
   };

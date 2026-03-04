@@ -33,7 +33,7 @@ router.delete('/:id', authenticateToken, barsController.deleteBar);
 router.post('/:barId/tags/:tagId', authenticateToken, barsController.addTagToBar);
 // DELETE /bars/:barId/tags/:tagId -> remove a tag from a bar
 router.delete('/:barId/tags/:tagId', authenticateToken, barsController.removeTagFromBar);
-// GET /bars/:barId/users -> list users assigned to this bar (super_admin only)
+// GET /bars/:barId/users -> list users assigned to this bar (admin only)
 router.get('/:barId/users', authenticateToken, requireAdmin, userBarsController.getBarUsers);
 
 module.exports = router;
