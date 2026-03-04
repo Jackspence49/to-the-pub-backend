@@ -1,10 +1,11 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
-const { 
-  generateEventInstances, 
-  validateRecurrenceData, 
-  getRecurrenceDescription 
+const {
+  generateEventInstances,
+  validateRecurrenceData,
+  getRecurrenceDescription
 } = require('../utils/eventRecurrence');
+const { checkBarAccess } = require('../middleware/auth');
 
 /**
  * POST /events
@@ -142,6 +143,12 @@ async function createEvent(req, res) {
       return res.status(404).json({ error: 'Bar not found or inactive' });
     }
 
+    const hasAccess = await checkBarAccess(req.user.userId, payload.bar_id, req.user.role);
+    if (!hasAccess) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Access denied to this bar.' });
+    }
+
     // Create the master event
     const eventId = uuidv4();
     const insertEventSql = `
@@ -236,9 +243,37 @@ async function getEventInstances(req, res) {
       lon,
       radius,
       unit,
-      page = 1, 
-      limit = 20 
+      page,
+      limit,
+      offset
     } = req.query;
+
+    let pageNum = 1;
+    let limitNum = 20;
+    let offsetNum = null;
+
+    if (limit !== undefined) {
+      limitNum = Number.parseInt(limit, 10);
+      if (Number.isNaN(limitNum) || limitNum < 10 || limitNum > 100) {
+        return res.status(400).json({ error: 'limit must be between 10 and 100.' });
+      }
+    }
+
+    if (offset !== undefined) {
+      offsetNum = Number.parseInt(offset, 10);
+      if (Number.isNaN(offsetNum) || offsetNum < 0) {
+        return res.status(400).json({ error: 'offset must be a non-negative integer.' });
+      }
+    }
+
+    if (page !== undefined) {
+      pageNum = Number.parseInt(page, 10);
+      if (Number.isNaN(pageNum) || pageNum < 1) {
+        return res.status(400).json({ error: 'page must be a positive integer starting from 1.' });
+      }
+    }
+
+    const effectiveOffset = offsetNum !== null ? offsetNum : (pageNum - 1) * limitNum;
 
     // Validate date formats if provided
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
@@ -423,11 +458,8 @@ async function getEventInstances(req, res) {
     }
 
     // Add pagination
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const offset = (pageNum - 1) * limitNum;
     selectSql += ` LIMIT ? OFFSET ?`;
-    const selectQueryParams = [...selectParams, ...whereParams, limitNum, offset];
+    const selectQueryParams = [...selectParams, ...whereParams, limitNum, effectiveOffset];
     const [rows] = await db.query(selectSql, selectQueryParams);
 
     // Get total count for pagination metadata
@@ -435,16 +467,27 @@ async function getEventInstances(req, res) {
     const countParams = [...whereParams];
     const [countRows] = await db.query(countSql, countParams);
     const totalCount = countRows[0].total;
+    const totalPages = Math.ceil(totalCount / limitNum);
+    const effectivePage = Math.floor(effectiveOffset / limitNum) + 1;
+    const hasNextPage = effectivePage < totalPages;
+    const hasPreviousPage = effectivePage > 1;
+    const nextPage = hasNextPage ? effectivePage + 1 : null;
+    const prevPage = hasPreviousPage ? effectivePage - 1 : null;
 
     return res.json({ 
       success: true, 
       data: rows,
       meta: {
-        count: rows.length,
-        total: totalCount,
-        page: pageNum,
-        limit: limitNum,
-        total_pages: Math.ceil(totalCount / limitNum),
+        pagination: {
+          current_page: effectivePage,
+          per_page: limitNum,
+          total: totalCount,
+          total_pages: totalPages,
+          has_next_page: hasNextPage,
+          has_previous_page: hasPreviousPage,
+          next_page: nextPage,
+          prev_page: prevPage
+        },
         filters: { 
           bar_id, 
           date_from, 
@@ -644,11 +687,12 @@ async function updateEventInstance(req, res) {
 
     // Check if instance exists and gather current values
     const checkSql = `
-      SELECT 
-        ei.id, 
-        ei.event_id, 
-        ei.custom_start_time, 
+      SELECT
+        ei.id,
+        ei.event_id,
+        ei.custom_start_time,
         ei.custom_end_time,
+        e.bar_id,
         e.start_time as master_start_time,
         e.end_time as master_end_time
       FROM event_instances ei
@@ -662,6 +706,9 @@ async function updateEventInstance(req, res) {
     }
 
     const instanceMeta = checkRows[0];
+
+    const hasAccess = await checkBarAccess(req.user.userId, instanceMeta.bar_id, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
     const updates = [];
     const params = [];
     const appendUpdate = (clause, value) => {
@@ -851,7 +898,7 @@ async function updateEvent(req, res) {
 
     // Check if event exists and is active, and get current values
     const checkSql = `
-      SELECT id, title, description, event_tag_id, external_link, image_url,
+      SELECT id, bar_id, title, description, event_tag_id, external_link, image_url,
              recurrence_pattern, recurrence_days, start_date, recurrence_end_date,
              recurrence_end_occurrences, start_time, end_time, crosses_midnight,
              is_active
@@ -864,6 +911,9 @@ async function updateEvent(req, res) {
     }
 
     const currentEvent = checkRows[0];
+
+    const hasAccess = await checkBarAccess(userId, currentEvent.bar_id, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
 
     const normalizeDateValue = (value) => {
       if (!value) {
@@ -1241,12 +1291,15 @@ async function deleteEvent(req, res) {
     const userId = req.user.userId; // From JWT
 
     // Check if event exists and is active
-    const checkSql = `SELECT id, title FROM events WHERE id = ? AND is_active = 1`;
+    const checkSql = `SELECT id, bar_id, title FROM events WHERE id = ? AND is_active = 1`;
     const [checkRows] = await db.execute(checkSql, [eventId]);
 
     if (!checkRows || checkRows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
+
+    const hasAccess = await checkBarAccess(userId, checkRows[0].bar_id, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
 
     // Soft delete the event
     const deleteSql = `UPDATE events SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;

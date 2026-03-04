@@ -10,7 +10,12 @@ const required = [
 	'DB_USER',
 	'DB_NAME',
 	'PORT',
-	'JWT_SECRET'
+	'JWT_SECRET',
+	'SMTP_HOST',
+	'SMTP_USER',
+	'SMTP_PASS',
+	'SMTP_FROM',
+	'FRONTEND_URL'
 ];
 
 const missing = required.filter((k) => !process.env[k]);

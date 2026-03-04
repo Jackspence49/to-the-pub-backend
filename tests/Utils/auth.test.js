@@ -166,7 +166,7 @@ describe('Authentication Middleware Tests', () => {
                 const mockDecodedToken = {
                     userId: 'user-123',
                     email: 'test@example.com',
-                    role: 'super_admin',
+                    role: 'admin',
                     iat: 1697234567,
                     exp: 1697320967
                 };

@@ -1,5 +1,6 @@
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
+const { checkBarAccess } = require('../middleware/auth');
 
 const normalizeTimeString = value => {
   if (value === undefined || value === null || value === '' || value === 'null') {
@@ -68,6 +69,10 @@ const fetchBarHours = async barId => {
  * If close_time is earlier than open_time, crosses_midnight will be set to true.
  */
 async function createBar(req, res) {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied. Only admins can create bars.' });
+  }
+
   const payload = req.body;
 
   // Basic validation
@@ -599,7 +604,10 @@ async function updateBar(req, res) {
     if (!checkRows || checkRows.length === 0) {
       return res.status(404).json({ error: 'Bar not found' });
     }
-    
+
+    const hasAccess = await checkBarAccess(req.user.userId, barId, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
+
     // Warn if hours or tag_ids are provided in the payload
     if (payload.hours || payload.tag_ids) {
       return res.status(400).json({ 
@@ -706,7 +714,10 @@ async function deleteBar(req, res) {
   try {
     const barId = req.params.id;
     const userId = req.user.userId; // From JWT
-    
+
+    const hasAccess = await checkBarAccess(userId, barId, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
+
     const deleteSql = `UPDATE bars SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = 1`;
     const [result] = await db.execute(deleteSql, [barId]);
     
@@ -808,15 +819,18 @@ async function addTagToBar(req, res) {
     if (!barRows || barRows.length === 0) {
       return res.status(404).json({ error: 'Bar not found' });
     }
-    
+
+    const hasAccess = await checkBarAccess(req.user.userId, barId, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
+
     // Check if tag exists
     const checkTagSql = `SELECT id FROM bar_tags WHERE id = ?`;
     const [tagRows] = await db.execute(checkTagSql, [tagId]);
-    
+
     if (!tagRows || tagRows.length === 0) {
       return res.status(404).json({ error: 'Tag not found' });
     }
-    
+
     // Check if relationship already exists
     const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tag_assignments WHERE bar_id = ? AND tag_id = ?`;
     const [relationRows] = await db.execute(checkRelationSql, [barId, tagId]);
@@ -859,15 +873,18 @@ async function removeTagFromBar(req, res) {
     if (!barRows || barRows.length === 0) {
       return res.status(404).json({ error: 'Bar not found' });
     }
-    
+
+    const hasAccess = await checkBarAccess(req.user.userId, barId, req.user.role);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied to this bar.' });
+
     // Check if tag exists
     const checkTagSql = `SELECT id FROM bar_tags WHERE id = ?`;
     const [tagRows] = await db.execute(checkTagSql, [tagId]);
-    
+
     if (!tagRows || tagRows.length === 0) {
       return res.status(404).json({ error: 'Tag not found' });
     }
-    
+
     // Check if relationship exists
     const checkRelationSql = `SELECT bar_id, tag_id FROM bar_tag_assignments WHERE bar_id = ? AND tag_id = ?`;
     const [relationRows] = await db.execute(checkRelationSql, [barId, tagId]);
@@ -1101,7 +1118,13 @@ async function updateBarHours(req, res) {
       await conn.rollback();
       return res.status(404).json({ error: 'Bar not found' });
     }
-    
+
+    const hasAccess = await checkBarAccess(req.user.userId, barId, req.user.role);
+    if (!hasAccess) {
+      await conn.rollback();
+      return res.status(403).json({ error: 'Access denied to this bar.' });
+    }
+
     // Delete all existing hours for the bar
     const deleteSql = `DELETE FROM bar_hours WHERE bar_id = ?`;
     await conn.execute(deleteSql, [barId]);

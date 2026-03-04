@@ -3,43 +3,39 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-/**
- * Signup payload expected:
- * {
- *   email: string,
- *   password: string,
- *   full_name?: string
- * }
- *
- * This endpoint will create a new web_users row with role 'super_admin'.
- * Role is set on the backend to avoid trusting the client.
- */
+const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
+const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
+
+
+
+// Admin signup function Expected payload: {email: string, password: string, full_name?: string}
 async function signup(req, res) {
-  const payload = req.body;
-  if (!payload || !payload.email || !payload.password) {
-    return res.status(400).json({ error: 'email and password are required' });
+  // 1. Destructure with default empty object
+  const { email, password, full_name } = req.body || {};
+
+  // 2. Initial presence check for required fields
+  if (!email || !password || !full_name) {
+    return res.status(400).json({ error: 'Email, password, and full_name are required' });
   }
 
-  const email = payload.email.trim().toLowerCase();
-  const password = payload.password;
-  const fullName = payload.full_name || null;
-
-  // Basic validation
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'password must be at least 8 characters' });
+  // 3. Normalize and Validate 
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    return res.status(400).json({ error: 'Invalid email format' });
   }
 
-  // Hash the password
-  const saltRounds = 10;
-  const passwordHash = await bcrypt.hash(password, saltRounds);
+  if (password.length < MIN_PASSWORD_LENGTH || !isValidPassword(password)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  }
 
-  const userId = uuidv4();
-  const role = 'super_admin';
-
-  const insertSql = `INSERT INTO web_users (id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?)`;
   try {
-    const [result] = await db.execute(insertSql, [userId, email, passwordHash, fullName, role]);
-    return res.status(201).json({ data: { id: userId, email, full_name: fullName, role } });
+    const userId = uuidv4();
+    const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+    const role = 'admin';
+
+    const insertSql = `INSERT INTO web_users (id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?)`;
+    const [result] = await db.execute(insertSql, [userId, normalizedEmail, password_hash, full_name, role]);
+    return res.status(201).json({ data: { id: userId, email: normalizedEmail, full_name, role } });
   } catch (err) {
     console.error('Error creating user:', err.message || err);
     // Handle duplicate email error (MySQL ER_DUP_ENTRY)
@@ -50,12 +46,7 @@ async function signup(req, res) {
   }
 }
 
-/**
- * Login payload expected:
- * { email: string, password: string }
- *
- * Returns 200 with JWT token and user info on success, 401 on invalid creds
- */
+//Login payload expected: { email: string, password: string }
 async function login(req, res) {
   const payload = req.body;
   if (!payload || !payload.email || !payload.password) {
@@ -71,16 +62,20 @@ async function login(req, res) {
     
     const [rows] = await db.execute(selectSql, [email]);
     if (!rows || rows.length === 0) {
+      req.recordFailedLogin?.();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const user = rows[0];
-    
+
     // Compare the received password with the stored hashed password using bcrypt.compare()
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match) {
+      req.recordFailedLogin?.();
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    req.clearFailedLogins?.();
 
     // Create JWT token with user ID and role information
     const jwtPayload = {
@@ -110,10 +105,7 @@ async function login(req, res) {
   }
 }
 
-/**
- * Get current user profile (protected route)
- * Requires authentication middleware to populate req.user
- */
+//Get current user profile (protected route)
 async function getProfile(req, res) {
   try {
     const userId = req.user.userId; // From JWT payload
@@ -142,10 +134,7 @@ async function getProfile(req, res) {
   }
 }
 
-/**
- * Update user profile (protected route)
- * Allows users to update their full_name
- */
+//Update user profile (protected route)
 async function updateProfile(req, res) {
   try {
     const userId = req.user.userId; // From JWT payload
@@ -173,10 +162,7 @@ async function updateProfile(req, res) {
   }
 }
 
-/**
- * Delete user by UUID (protected route)
- * Requires authentication
- */
+// Delete user by UUID (protected route)
 async function deleteUser(req, res) {
   try {
     const { id } = req.params; // UUID from URL parameters
@@ -223,14 +209,7 @@ async function deleteUser(req, res) {
   }
 }
 
-/**
- * Initiate password reset (public route)
- * Payload expected: { email: string }
- * 
- * Generates a reset token and stores it in the database with expiration time.
- * In a production environment, this would send an email with the reset link.
- * For now, it returns the token in the response for testing purposes.
- */
+//Initiate password reset (public route) Payload expected: { email: string }
 async function forgotPassword(req, res) {
   try {
     const { email } = req.body;
@@ -281,12 +260,7 @@ async function forgotPassword(req, res) {
   }
 }
 
-/**
- * Reset password using token (public route)
- * Payload expected: { token: string, newPassword: string }
- * 
- * Validates the reset token and updates the user's password if valid.
- */
+//Reset password using token (public route) Payload expected: { token: string, newPassword: string }
 async function resetPassword(req, res) {
   try {
     const { token, newPassword } = req.body;
@@ -340,4 +314,38 @@ async function resetPassword(req, res) {
   }
 }
 
-module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword };
+// Invite a non-admin web user (admin only) Expected payload: {email: string, password: string, full_name: string}
+async function inviteUser(req, res) {
+  const { email, password, full_name } = req.body || {};
+
+  if (!email || !password || !full_name) {
+    return res.status(400).json({ error: 'Email, password, and full_name are required' });
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  if (password.length < MIN_PASSWORD_LENGTH || !isValidPassword(password)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  }
+
+  const userId = uuidv4();
+  const role = 'user';
+  const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+
+  const insertSql = `INSERT INTO web_users (id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?)`;
+  try {
+    await db.execute(insertSql, [userId, normalizedEmail, password_hash, full_name, role]);
+    return res.status(201).json({ data: { id: userId, email: normalizedEmail, full_name, role } });
+  } catch (err) {
+    console.error('Error inviting user:', err.message || err);
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+    return res.status(500).json({ error: 'Failed to invite user' });
+  }
+}
+
+module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword, inviteUser };

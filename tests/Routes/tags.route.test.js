@@ -29,7 +29,7 @@ describe('Tags Routes Integration Tests', () => {
     mockUser = createMockUser({
       id: 'test-user-123',
       email: 'test@example.com',
-      role: 'super_admin'
+      role: 'admin'
     });
 
     validToken = createTestJWT({

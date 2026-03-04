@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const eventsController = require('../controllers/events');
-const { authenticateToken } = require('../utils/auth');
+const { authenticateToken } = require('../middleware/auth');
 
 // Public routes (no authentication required)
 

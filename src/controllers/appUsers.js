@@ -1,84 +1,90 @@
+const crypto = require('crypto');
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
+const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
+const { ensureAppUserToken } = require('../middleware/token');
+const { buildToken } = require('../utils/token');
+const { sendPasswordResetEmail } = require('../utils/email');
 
-const MIN_PASSWORD_LENGTH = 8;
-const SALT_ROUNDS = 10;
-
-const normalizeEmail = (email = '') => email.trim().toLowerCase();
-
-const ensureAppUserToken = (req, res) => {
-  if (!req.user || req.user.userType !== 'app_user') {
-    res.status(403).json({ error: 'App user authentication required' });
-    return false;
-  }
-  return true;
-};
-
-const buildToken = ({ id, email }) => jwt.sign(
-  {
-    userId: id,
-    email,
-    userType: 'app_user'
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: '7d' }
-);
-
+// Register function for app users
 async function register(req, res) {
-  const { email, password, full_name } = req.body || {};
+  // 1. Destructure with default empty object
+  const { email, password, full_name, phone } = req.body || {};
 
+  // 2. Initial presence check for required fields
   if (!email || !password) {
-    return res.status(400).json({ error: 'email and password are required' });
+    return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return res.status(422).json({ error: 'password must be at least 8 characters' });
-  }
-
+  // 3. Normalize and Validate 
   const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  if (password.length < MIN_PASSWORD_LENGTH || !isValidPassword(password)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  }
+
+  const normalizedPhone = phone ? formatPhoneForDB(phone) : null;
+  if (phone && !isValidPhone(normalizedPhone)) {
+    return res.status(400).json({ error: 'Invalid phone number format' });
+  }
 
   try {
-    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    // 4. Secure Hashing & ID generation
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS); 
     const userId = uuidv4();
 
     const insertSql = `
-      INSERT INTO app_users (id, email, password_hash, full_name)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO app_users (id, email, password_hash, full_name, phone)
+      VALUES (?, ?, ?, ?, ?)
     `;
 
+    // 5. Database Execution
     await db.execute(insertSql, [
       userId,
       normalizedEmail,
       passwordHash,
-      full_name || null
+      full_name || null,
+      normalizedPhone || null
     ]);
 
+    // 6. Token Generation (Your helper)
     const token = buildToken({ id: userId, email: normalizedEmail });
 
+    // 7. Success Response (201 Created)
     return res.status(201).json({
+      message: "User created successfully",
       data: {
         id: userId,
         email: normalizedEmail,
-        full_name: full_name || null
+        full_name: full_name || null,
+        phone: normalizedPhone || null
       },
       token
     });
+
   } catch (err) {
-    console.error('Error registering app user:', err.message || err);
-    if (err && err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'Email already registered' });
+    console.error('Registration Error:', err);
+
+    // Handle DB Duplicates (409 Conflict)
+    if (err.code === 'ER_DUP_ENTRY' || err.errno === 1062) {
+      return res.status(409).json({ error: 'Email or phone already registered' });
     }
-    return res.status(500).json({ error: 'Failed to register app user' });
+
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
+// Login function for app users
 async function login(req, res) {
   const { email, password } = req.body || {};
 
   if (!email || !password) {
-    return res.status(400).json({ error: 'email and password are required' });
+    return res.status(400).json({ error: 'Email and password are required' });
   }
 
   const normalizedEmail = normalizeEmail(email);
@@ -92,23 +98,31 @@ async function login(req, res) {
     `;
 
     const [rows] = await db.execute(selectSql, [normalizedEmail]);
-
-    if (!rows || rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
     const user = rows[0];
+
+    // 2. Generic Error Message to prevent enumeration
+    const genericError = 'Invalid email address or password';
+
+    if (!user) {
+      // Still need to call bcrypt to prevent time-based attacks
+      await bcrypt.compare(password, 'some_dummy_hash');
+      return res.status(401).json({ error: genericError });
+    }
 
     if (!user.is_active) {
       return res.status(403).json({ error: 'Account is inactive' });
     }
 
+    // 3. Password Check
     const passwordMatch = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      req.recordFailedLogin?.();
+      return res.status(401).json({ error: genericError });
     }
 
+    // 5. Success Path
     await db.execute('UPDATE app_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
+    req.clearFailedLogins?.();
 
     const token = buildToken({ id: user.id, email: user.email });
 
@@ -121,14 +135,16 @@ async function login(req, res) {
       token
     });
   } catch (err) {
-    console.error('Error logging in app user:', err.message || err);
+    console.error('Error logging in app user:', err);
     return res.status(500).json({ error: 'Failed to login' });
   }
 }
 
+// Get profile function for app users
 async function getProfile(req, res) {
+  // Authenticate Request
   if (!ensureAppUserToken(req, res)) {
-    return;
+    return; 
   }
 
   try {
@@ -139,6 +155,7 @@ async function getProfile(req, res) {
       LIMIT 1
     `;
 
+    // 2. Fetch User Data based on token ID
     const [rows] = await db.execute(selectSql, [req.user.userId]);
 
     if (!rows || rows.length === 0) {
@@ -147,54 +164,74 @@ async function getProfile(req, res) {
 
     const user = rows[0];
 
+    // 3. Return Sanitized Data
     return res.status(200).json({
       success: true,
       data: {
         id: user.id,
         email: user.email,
-        full_name: user.full_name,
-        phone: user.phone,
+        // Use empty string fallback for null values to keep frontend code clean
+        full_name: user.full_name || '', 
+        phone: user.phone || '',
         last_login: user.last_login,
         created_at: user.created_at
       }
     });
   } catch (err) {
-    console.error('Error fetching app user profile:', err.message || err);
+    console.error('Error fetching app user profile:', err);
     return res.status(500).json({ error: 'Failed to fetch profile' });
   }
 }
 
+// Update profile function for app users
 async function updateProfile(req, res) {
+  // Authenticate Request
   if (!ensureAppUserToken(req, res)) {
     return;
   }
 
   const { full_name, phone, new_password } = req.body || {};
 
+  // Ensure at least one field is provided
   if (full_name === undefined && phone === undefined && !new_password) {
     return res.status(400).json({ error: 'No profile fields supplied' });
   }
 
-  if (new_password && new_password.length < MIN_PASSWORD_LENGTH) {
-    return res.status(422).json({ error: 'password must be at least 8 characters' });
+  // Validate New Password Complexity
+  if (new_password && !isValidPassword(new_password)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  }
+
+  // Validate and Format Phone Number
+  let formattedPhone = phone;
+  if (phone !== undefined) {
+    if (phone === null) {
+      formattedPhone = null;
+    } else {
+      formattedPhone = formatPhoneForDB(phone);
+      if (!isValidPhone(formattedPhone)) {
+        return res.status(400).json({ error: 'Invalid phone number format. Please use E.164 format (e.g., +15551234567)' });
+      }
+    }
   }
 
   try {
     const updates = [];
     const params = [];
 
+    // Dynamically build SQL SET clause
     if (full_name !== undefined) {
       updates.push('full_name = ?');
       params.push(full_name || null);
     }
 
-    if (phone !== undefined) {
+    if (formattedPhone !== undefined) {
       updates.push('phone = ?');
-      params.push(phone || null);
+      params.push(formattedPhone);
     }
 
     if (new_password) {
-      const newHash = await bcrypt.hash(new_password, SALT_ROUNDS);
+      const newHash = await bcrypt.hash(new_password, 12);
       updates.push('password_hash = ?');
       params.push(newHash);
     }
@@ -209,10 +246,11 @@ async function updateProfile(req, res) {
 
     params.push(req.user.userId);
 
+    // 5. Execute Update
     const [result] = await db.execute(updateSql, params);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'App user not found' });
+      return res.status(404).json({ error: 'App user not found or inactive' });
     }
 
     return res.status(200).json({
@@ -220,14 +258,22 @@ async function updateProfile(req, res) {
       message: 'Profile updated successfully'
     });
   } catch (err) {
-    console.error('Error updating app user profile:', err.message || err);
+    console.error('Error updating app user profile:', err);
+    
+    // 6. Handle Database Constraints (e.g., Duplicate Phone)
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Phone number already registered' });
+    }
+    
     return res.status(500).json({ error: 'Failed to update profile' });
   }
 }
 
+// Forgot password function for app users
 async function forgotPassword(req, res) {
   const { email } = req.body || {};
 
+  // Validate presence of email
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
@@ -235,45 +281,65 @@ async function forgotPassword(req, res) {
   const normalizedEmail = normalizeEmail(email);
 
   try {
-    const selectSql = `SELECT id FROM app_users WHERE email = ? AND is_active = 1 LIMIT 1`;
+    // 1. Find user by email and ensure they are active
+    const selectSql = `
+    SELECT id FROM app_users 
+    WHERE email = ? AND is_active = 1 
+    LIMIT 1
+    `;
     const [rows] = await db.execute(selectSql, [normalizedEmail]);
 
+    // 2. Always respond with success message to prevent email enumeration
     if (!rows || rows.length === 0) {
       return res.status(200).json({ success: true, message: 'If the account exists, a reset link has been sent.' });
     }
 
     const user = rows[0];
-    const resetToken = `${uuidv4()}-${Date.now()}`;
+    const resetToken = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 60 * 60 * 1000);
 
+    // 3. Store reset token and expiration in the database
     await db.execute(
       'UPDATE app_users SET reset_token = ?, reset_token_expires = ? WHERE id = ?',
       [resetToken, expires, user.id]
     );
 
+    // 4. Send password reset email (log error but do not fail the request)
+    try {
+      await sendPasswordResetEmail(normalizedEmail, resetToken);
+    } catch (emailErr) {
+      console.error('Error sending password reset email:', emailErr.message || emailErr);
+    }
+
+    // 5. Respond with generic success message
     return res.status(200).json({
       success: true,
-      message: 'Password reset initiated',
-      resetToken
+      message: 'If the account exists, a reset link has been sent.'
     });
-  } catch (err) {
+  } 
+  // 6. Log any unexpected errors and return generic message
+  catch (err) {
     console.error('Error initiating app user password reset:', err.message || err);
     return res.status(500).json({ error: 'Failed to initiate password reset' });
   }
 }
 
+// Reset password function for app users
 async function resetPassword(req, res) {
   const { token, newPassword } = req.body || {};
 
+  //Validate presence of token and new password
   if (!token || !newPassword) {
     return res.status(400).json({ error: 'Token and new password are required' });
   }
 
-  if (newPassword.length < MIN_PASSWORD_LENGTH) {
-    return res.status(422).json({ error: 'Password must be at least 8 characters' });
+  //Validate new password complexity
+  if (newPassword.length < MIN_PASSWORD_LENGTH || !isValidPassword(newPassword)) {
+    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
   }
 
   try {
+    // 1. Find user by token and ensure it's not expired
     const selectSql = `
       SELECT id FROM app_users
       WHERE reset_token = ? AND reset_token_expires > NOW()
@@ -282,13 +348,18 @@ async function resetPassword(req, res) {
 
     const [rows] = await db.execute(selectSql, [token]);
 
+    //2. Prevent timing attacks by always calling bcrypt, even if token is invalid
     if (!rows || rows.length === 0) {
+      await bcrypt.compare('some_dummy_hash', SALT_ROUNDS);
       return res.status(401).json({ error: 'Invalid or expired reset token' });
     }
 
     const user = rows[0];
+
+    // 3. Hash the new password
     const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
+    // 4. Update user's password and clear reset token
     const updateSql = `
       UPDATE app_users
       SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL
@@ -297,9 +368,12 @@ async function resetPassword(req, res) {
 
     await db.execute(updateSql, [newHash, user.id]);
 
-    return res.status(200).json({ success: true, message: 'Password reset successfully' });
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Password reset successfully' });
   } catch (err) {
-    console.error('Error resetting app user password:', err.message || err);
+    // 5. Log error and return generic message
+    console.error('Error resetting app user password:', err);
     return res.status(500).json({ error: 'Failed to reset password' });
   }
 }
