@@ -1,6 +1,14 @@
+const crypto = require('crypto');
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
+const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone, isValidRole } = require('../utils/user');
+
+//Missing but in Users
+const { ensureWebUserToken } = require('../middleware/token');
+const { buildWebUserToken } = require('../utils/token');
+const { sendPasswordResetEmail } = require('../utils/email');
 const jwt = require('jsonwebtoken');
 
 const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
@@ -29,20 +37,50 @@ async function signup(req, res) {
   }
 
   try {
+    //Seting role Hasing and ID Generation
     const userId = uuidv4();
     const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
     const role = 'admin';
 
-    const insertSql = `INSERT INTO web_users (id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?)`;
-    const [result] = await db.execute(insertSql, [userId, normalizedEmail, password_hash, full_name, role]);
-    return res.status(201).json({ data: { id: userId, email: normalizedEmail, full_name, role } });
+    const insertSql = `
+      INSERT INTO web_users (id, email, password_hash, full_name, role) 
+      VALUES (?, ?, ?, ?, ?)
+    `;
+
+    // 5. Database Execution
+    await db.execute(insertSql, [
+      userId, 
+      normalizedEmail, 
+      password_hash, 
+      full_name, 
+      role
+    ]);
+
+  // 6. Token Generation
+  const token = buildWebUserToken({ id: userId, email: normalizedEmail, role });
+
+  //7. Sucess Reponse 
+    return res.status(201).json({ 
+      message: "Web Admin Created Successfully",
+      data: 
+      { 
+        id: userId, 
+        email: normalizedEmail, 
+        full_name, 
+        role 
+      },
+    token
+   });
+
   } catch (err) {
-    console.error('Error creating user:', err.message || err);
-    // Handle duplicate email error (MySQL ER_DUP_ENTRY)
-    if (err && err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'Email already exists' });
+    console.error('Registration Error:', err);
+
+    // Handle DB Duplicates (409 Conflict)
+    if (err.code === 'ER_DUP_ENTRY' || err.errno === 1062) {
+      return res.status(409).json({ error: 'Email already registered' });
     }
-    return res.status(500).json({ error: 'Failed to create user' });
+
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
@@ -107,9 +145,12 @@ async function login(req, res) {
 
 //Get current user profile (protected route)
 async function getProfile(req, res) {
+  if (!ensureWebUserToken(req, res)) {
+  return; 
+  }
+
   try {
     const userId = req.user.userId; // From JWT payload
-    
     const selectSql = `SELECT id, email, full_name, role, created_at FROM web_users WHERE id = ? LIMIT 1`;
     const [rows] = await db.execute(selectSql, [userId]);
     
@@ -136,6 +177,10 @@ async function getProfile(req, res) {
 
 //Update user profile (protected route)
 async function updateProfile(req, res) {
+  if (!ensureWebUserToken(req, res)) {
+  return; 
+  }
+
   try {
     const userId = req.user.userId; // From JWT payload
     const { full_name } = req.body;
@@ -314,12 +359,12 @@ async function resetPassword(req, res) {
   }
 }
 
-// Invite a non-admin web user (admin only) Expected payload: {email: string, password: string, full_name: string}
-async function inviteUser(req, res) {
-  const { email, password, full_name } = req.body || {};
+// Create a non-admin web user (admin only) Expected payload: {email: string, password: string, full_name: string}
+async function createUser(req, res) {
+  const { email, password, full_name, role } = req.body || {};
 
-  if (!email || !password || !full_name) {
-    return res.status(400).json({ error: 'Email, password, and full_name are required' });
+  if (!email || !password || !full_name || !role) {
+    return res.status(400).json({ error: 'Email, password, full_name, and role are required' });
   }
 
   const normalizedEmail = normalizeEmail(email);
@@ -331,21 +376,49 @@ async function inviteUser(req, res) {
     return res.status(400).json({ error: 'Password does not meet complexity requirements' });
   }
 
-  const userId = uuidv4();
-  const role = 'user';
-  const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+  if (!isValidRole(role)){
+    return res.status(400).json ({ error: 'Role needs to be admin, venue_owner, manager, or staff'})
+  }
 
-  const insertSql = `INSERT INTO web_users (id, email, password_hash, full_name, role) VALUES (?, ?, ?, ?, ?)`;
   try {
-    await db.execute(insertSql, [userId, normalizedEmail, password_hash, full_name, role]);
-    return res.status(201).json({ data: { id: userId, email: normalizedEmail, full_name, role } });
+    const userId = uuidv4();
+    const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+
+    const insertSql = 
+    `INSERT INTO web_users (id, email, password_hash, full_name, role) 
+    VALUES (?, ?, ?, ?, ?)
+    `;
+
+    await db.execute(insertSql, [
+      userId, 
+      normalizedEmail, 
+      password_hash, 
+      full_name, 
+      role
+    ]);
+
+    const token = buildWebUserToken({ id: userId, email: normalizedEmail });
+
+    return res.status(201).json({ 
+      message: "User created successfully",
+      data: { 
+        id: userId, 
+        email: normalizedEmail, 
+        full_name,
+        role
+      },
+      token
+      });
+
   } catch (err) {
-    console.error('Error inviting user:', err.message || err);
-    if (err && err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'Email already exists' });
+    console.error('Registration Error:', err);
+
+    if (err.code === 'ER_DUP_ENTRY' || err.errno === 1062) {
+      return res.status(409).json({ error: 'Email already registered' });
     }
-    return res.status(500).json({ error: 'Failed to invite user' });
+
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
-module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword, inviteUser };
+module.exports = { signup, login, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword, createUser };

@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
 const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
 const { ensureAppUserToken } = require('../middleware/token');
-const { buildToken } = require('../utils/token');
+const { buildAppUserToken } = require('../utils/token');
 const { sendPasswordResetEmail } = require('../utils/email');
 
 // Register function for app users
@@ -14,8 +14,8 @@ async function register(req, res) {
   const { email, password, full_name, phone } = req.body || {};
 
   // 2. Initial presence check for required fields
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password are required' });
+  if (!email || !password || !full_name) {
+    return res.status(400).json({ error: 'Email, password, and full name are required' });
   }
 
   // 3. Normalize and Validate 
@@ -48,12 +48,12 @@ async function register(req, res) {
       userId,
       normalizedEmail,
       passwordHash,
-      full_name || null,
+      full_name,
       normalizedPhone || null
     ]);
 
     // 6. Token Generation (Your helper)
-    const token = buildToken({ id: userId, email: normalizedEmail });
+    const token = buildAppUserToken({ id: userId, email: normalizedEmail });
 
     // 7. Success Response (201 Created)
     return res.status(201).json({
@@ -61,7 +61,7 @@ async function register(req, res) {
       data: {
         id: userId,
         email: normalizedEmail,
-        full_name: full_name || null,
+        full_name,
         phone: normalizedPhone || null
       },
       token
@@ -124,7 +124,7 @@ async function login(req, res) {
     await db.execute('UPDATE app_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
     req.clearFailedLogins?.();
 
-    const token = buildToken({ id: user.id, email: user.email });
+    const token = buildAppUserToken({ id: user.id, email: user.email });
 
     return res.status(200).json({
       data: {

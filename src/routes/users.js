@@ -17,7 +17,7 @@ router.post('/reset-password', usersController.resetPassword);
 // POST /users -> signup (creates a admin user for this form)
 router.post('/', authenticateToken, usersController.signup);
 // POST /users/invite -> create a non-admin web user (admin only)
-router.post('/invite', authenticateToken, requireAdmin, usersController.inviteUser);
+router.post('/create-user', authenticateToken, requireAdmin, usersController.createUser);
 // GET /users/profile -> get current user profile
 router.get('/profile', authenticateToken, usersController.getProfile);
 // PUT /users/profile -> update current user profile

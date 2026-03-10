@@ -45,10 +45,17 @@ const formatPhoneForDB = (rawPhone) => {
   return cleaned;
 };
 
+//Valid Roles
+const VALID_ROLES = ['admin','venue_owner','manager','staff']
+
+const isValidRole = (role) => VALID_ROLES.includes(role)
+
+
 module.exports = {
   normalizeEmail,
   isValidEmail,
   isValidPassword,
   isValidPhone,
-  formatPhoneForDB
+  formatPhoneForDB,
+  isValidRole
 };

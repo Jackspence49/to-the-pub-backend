@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 
-function buildToken({ id, email }) {
+// 
+function buildAppUserToken({ id, email }) {
   const payload = {
     userId: id,
     email,
@@ -9,4 +10,14 @@ function buildToken({ id, email }) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
 }
 
-module.exports = { buildToken };
+ function buildWebUserToken({ id, email, role }) {
+    const payload = {
+      userId: id,
+      email,
+      role,
+      userType: 'web_user'
+    };
+    return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+  }
+
+module.exports = { buildAppUserToken, buildWebUserToken };
