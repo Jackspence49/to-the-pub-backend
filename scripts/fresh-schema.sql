@@ -194,7 +194,6 @@ CREATE TABLE app_users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_app_users_email (email),
-    INDEX idx_app_users_active (is_active)
 );
 
 -- ===========================
