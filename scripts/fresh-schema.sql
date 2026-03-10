@@ -191,7 +191,6 @@ CREATE TABLE app_users (
     last_login TIMESTAMP NULL DEFAULT NULL,
     reset_token VARCHAR(255) DEFAULT NULL,
     reset_token_expires TIMESTAMP NULL DEFAULT NULL,
-    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_app_users_email (email),

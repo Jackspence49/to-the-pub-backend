@@ -91,7 +91,7 @@ async function login(req, res) {
 
   try {
     const selectSql = `
-      SELECT id, email, password_hash, full_name, is_active
+      SELECT id, email, password_hash, full_name
       FROM app_users
       WHERE email = ?
       LIMIT 1
@@ -106,10 +106,6 @@ async function login(req, res) {
     if (!user) {
       // Still need to call bcrypt to prevent time-based attacks
       await bcrypt.compare(password, DUMMY_HASH);
-      return res.status(401).json({ error: genericError });
-    }
-
-    if (!user.is_active) {
       return res.status(401).json({ error: genericError });
     }
 
