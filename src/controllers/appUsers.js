@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
-const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
+const { MIN_PASSWORD_LENGTH, SALT_ROUNDS, DUMMY_HASH } = require('../utils/constants');
 const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
 const { ensureAppUserToken } = require('../middleware/token');
 const { buildAppUserToken } = require('../utils/token');
@@ -105,12 +105,12 @@ async function login(req, res) {
 
     if (!user) {
       // Still need to call bcrypt to prevent time-based attacks
-      await bcrypt.compare(password, 'some_dummy_hash');
+      await bcrypt.compare(password, DUMMY_HASH);
       return res.status(401).json({ error: genericError });
     }
 
     if (!user.is_active) {
-      return res.status(403).json({ error: 'Account is inactive' });
+      return res.status(401).json({ error: genericError });
     }
 
     // 3. Password Check
@@ -130,7 +130,7 @@ async function login(req, res) {
       data: {
         id: user.id,
         email: user.email,
-        full_name: user.full_name || null
+        full_name: user.full_name
       },
       token
     });

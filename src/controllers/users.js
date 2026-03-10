@@ -2,19 +2,13 @@ const crypto = require('crypto');
 const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
-const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
-const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone, isValidRole } = require('../utils/user');
-
-//Missing but in Users
+const { MIN_PASSWORD_LENGTH, SALT_ROUNDS, DUMMY_HASH } = require('../utils/constants');
+const { normalizeEmail, isValidEmail, isValidPassword, isValidRole } = require('../utils/user');
 const { ensureWebUserToken } = require('../middleware/token');
 const { buildWebUserToken } = require('../utils/token');
+
 const { sendPasswordResetEmail } = require('../utils/email');
 const jwt = require('jsonwebtoken');
-
-const { MIN_PASSWORD_LENGTH, SALT_ROUNDS } = require('../utils/constants');
-const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
-
-
 
 // Admin signup function Expected payload: {email: string, password: string, full_name?: string}
 async function signup(req, res) {
@@ -86,62 +80,66 @@ async function signup(req, res) {
 
 //Login payload expected: { email: string, password: string }
 async function login(req, res) {
-  const payload = req.body;
-  if (!payload || !payload.email || !payload.password) {
-    return res.status(400).json({ error: 'email and password are required' });
+  const {email, password} = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  const email = payload.email.trim().toLowerCase();
-  const password = payload.password;
+  const normalizedEmail = normalizeEmail(email);
 
   try {
-    // Look up user by email (username field is treated as email)
-    const selectSql = `SELECT id, email, password_hash, full_name, role FROM web_users WHERE email = ? LIMIT 1`;
-    
-    const [rows] = await db.execute(selectSql, [email]);
-    if (!rows || rows.length === 0) {
-      req.recordFailedLogin?.();
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    const selectSql = `
+    SELECT id, email, password_hash, full_name, role, is_active
+    FROM web_users 
+    WHERE email = ? 
+    LIMIT 1
+    `;
 
+    const [rows] = await db.execute(selectSql, [normalizedEmail]);
     const user = rows[0];
 
-    // Compare the received password with the stored hashed password using bcrypt.compare()
-    const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) {
-      req.recordFailedLogin?.();
-      return res.status(401).json({ error: 'Invalid credentials' });
+    // 2. Generic Error Message to prevent enumeration
+    const genericError = 'Invalid email address or password';
+
+    if (!user) {
+      // Still need to call bcrypt to prevent time-based attacks
+      await bcrypt.compare(password, DUMMY_HASH);
+      return res.status(401).json({ error: genericError });
     }
 
+    if (!user.is_active) {
+      return res.status(401).json({ error: genericError });
+    }
+
+    // 3. Password Check
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      req.recordFailedLogin?.();
+      return res.status(401).json({ error: genericError });
+    }
+
+     // 5. Success Path
+    await db.execute(
+      'UPDATE web_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
     req.clearFailedLogins?.();
 
-    // Create JWT token with user ID and role information
-    const jwtPayload = {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      userType: 'web_user'
-    };
+    const token = buildWebUserToken({ id: user.id, email: user.email });
 
-    const token = jwt.sign(jwtPayload, process.env.JWT_SECRET, { 
-      expiresIn: '24h' 
-    });
-
-    // Send the JWT back in the response along with user info
-    return res.status(200).json({ 
-      data: { 
-        id: user.id, 
-        email: user.email, 
-        full_name: user.full_name, 
-        role: user.role 
+    return res.status(200).json({
+      data: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name 
       },
-      token: token
+      token
     });
   } catch (err) {
-    console.error('Error logging in:', err.message || err);
-    return res.status(500).json({ error: 'Login failed' });
+    console.error('Error logging in app user:', err);
+    return res.status(500).json({ error: 'Failed to login' });
   }
 }
+
 
 //Get current user profile (protected route)
 async function getProfile(req, res) {

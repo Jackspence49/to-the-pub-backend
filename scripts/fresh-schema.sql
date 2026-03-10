@@ -155,6 +155,7 @@ CREATE TABLE web_users (
     password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(255),
     role ENUM('admin', 'venue_owner', 'staff', 'manager', 'user') NOT NULL DEFAULT 'user',
+    last_login TIMESTAMP NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     reset_token VARCHAR(255) DEFAULT NULL,
