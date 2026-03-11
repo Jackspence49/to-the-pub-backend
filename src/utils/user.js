@@ -50,6 +50,15 @@ const VALID_ROLES = ['admin','venue_owner','manager','staff']
 
 const isValidRole = (role) => VALID_ROLES.includes(role)
 
+// Validate Names
+const isValidFullName = (name) => {
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  // 2–100 chars, letters (including accented/unicode), spaces, hyphens, apostrophes
+  return trimmed.length >= 2 && trimmed.length <= 100 && /^[\p{L}\s'\-]+$/u.test(trimmed);
+};
+
+const normalizeFullName = (name) => name.trim().replace(/\s+/g, ' ');
 
 module.exports = {
   normalizeEmail,
@@ -57,5 +66,7 @@ module.exports = {
   isValidPassword,
   isValidPhone,
   formatPhoneForDB,
-  isValidRole
+  isValidRole,
+  isValidFullName,
+  normalizeFullName
 };

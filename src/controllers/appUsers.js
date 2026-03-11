@@ -3,7 +3,7 @@ const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const { MIN_PASSWORD_LENGTH, SALT_ROUNDS, DUMMY_HASH } = require('../utils/constants');
-const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone } = require('../utils/user');
+const { normalizeEmail, isValidEmail, isValidPassword, formatPhoneForDB, isValidPhone, isValidFullName, normalizeFullName } = require('../utils/user');
 const { ensureAppUserToken } = require('../middleware/token');
 const { buildAppUserToken } = require('../utils/token');
 const { sendPasswordResetEmail } = require('../utils/email');
@@ -185,16 +185,32 @@ async function updateProfile(req, res) {
     return;
   }
 
-  const { full_name, phone, new_password } = req.body || {};
+  const { email, full_name, phone, new_password } = req.body || {};
 
   // Ensure at least one field is provided
-  if (full_name === undefined && phone === undefined && !new_password) {
+  if (full_name === undefined && phone === undefined && !new_password && !email)  {
     return res.status(400).json({ error: 'No profile fields supplied' });
   }
 
-  // Validate New Password Complexity
-  if (new_password && !isValidPassword(new_password)) {
-    return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  // Validate full_name if provided
+  if (full_name !== undefined && full_name !== null) {
+    if (!isValidFullName(full_name)) {
+      return res.status(400).json({ error: 'Invalid full name. Must be 2–100 characters and contain only letters, spaces, hyphens, or apostrophes.' });
+    }
+  }
+
+  if (new_password) {
+    if (new_password.length < MIN_PASSWORD_LENGTH || !isValidPassword(new_password)) {
+      return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+    }
+  }
+
+  let normalizedEmail;
+  if (email) {
+    normalizedEmail = normalizeEmail(email);
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
   }
 
   // Validate and Format Phone Number
@@ -213,22 +229,32 @@ async function updateProfile(req, res) {
   try {
     const updates = [];
     const params = [];
+    const updatedFields = [];
 
     // Dynamically build SQL SET clause
+    if (normalizedEmail) {
+      updates.push('email = ?');
+      params.push(normalizedEmail);
+      updatedFields.push('email');
+    }
+
     if (full_name !== undefined) {
       updates.push('full_name = ?');
-      params.push(full_name || null);
+      params.push(full_name != null ? normalizeFullName(full_name) : null);
+      updatedFields.push('full_name');
     }
 
     if (formattedPhone !== undefined) {
       updates.push('phone = ?');
       params.push(formattedPhone);
+      updatedFields.push('phone');
     }
 
     if (new_password) {
-      const newHash = await bcrypt.hash(new_password, 12);
+      const newHash = await bcrypt.hash(new_password, SALT_ROUNDS);
       updates.push('password_hash = ?');
       params.push(newHash);
+      updatedFields.push('password');
     }
 
     updates.push('updated_at = CURRENT_TIMESTAMP');
@@ -236,12 +262,11 @@ async function updateProfile(req, res) {
     const updateSql = `
       UPDATE app_users
       SET ${updates.join(', ')}
-      WHERE id = ? AND is_active = 1
+      WHERE id = ?
     `;
 
     params.push(req.user.userId);
 
-    // 5. Execute Update
     const [result] = await db.execute(updateSql, params);
 
     if (result.affectedRows === 0) {
@@ -250,16 +275,16 @@ async function updateProfile(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Profile updated successfully'
+      message: 'Profile updated successfully',
+      updatedFields
     });
   } catch (err) {
     console.error('Error updating app user profile:', err);
-    
-    // 6. Handle Database Constraints (e.g., Duplicate Phone)
+
     if (err.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'Phone number already registered' });
+      return res.status(409).json({ error: 'Email or phone number already registered' });
     }
-    
+
     return res.status(500).json({ error: 'Failed to update profile' });
   }
 }
