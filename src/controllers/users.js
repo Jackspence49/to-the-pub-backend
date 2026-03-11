@@ -4,8 +4,8 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const { MIN_PASSWORD_LENGTH, SALT_ROUNDS, DUMMY_HASH } = require('../utils/constants');
 const { normalizeEmail, isValidEmail, isValidPassword, isValidRole } = require('../utils/user');
-const { ensureWebUserToken } = require('../middleware/token');
 const { buildWebUserToken } = require('../utils/token');
+const { ensureWebUserToken } = require('../middleware/token')
 
 const { sendPasswordResetEmail } = require('../utils/email');
 const jwt = require('jsonwebtoken');
@@ -136,7 +136,6 @@ async function login(req, res) {
   }
 }
 
-
 //Get current user profile (protected route)
 async function getProfile(req, res) {
   if (!ensureWebUserToken(req, res)) {
@@ -144,15 +143,20 @@ async function getProfile(req, res) {
   }
 
   try {
-    const userId = req.user.userId; // From JWT payload
-    const selectSql = `SELECT id, email, full_name, role, created_at FROM web_users WHERE id = ? LIMIT 1`;
-    const [rows] = await db.execute(selectSql, [userId]);
-    
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+    const selectSql = `
+    SELECT id, email, full_name, role, last_login, created_at
+    FROM web_users
+    WHERE id = ?
+    LIMIT 1`;
+
+    const [rows] = await db.execute(selectSql, [req.user.userId]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Web user not found' });
     }
-    
-    const user = rows[0];
+
+    const user = rows[0]
+
     return res.status(200).json({
       success: true,
       data: {
@@ -160,12 +164,13 @@ async function getProfile(req, res) {
         email: user.email,
         full_name: user.full_name,
         role: user.role,
+        last_login: user.last_login,
         created_at: user.created_at
       }
     });
   } catch (err) {
-    console.error('Error getting user profile:', err.message || err);
-    return res.status(500).json({ error: 'Failed to get user profile' });
+    console.error('Error fetching Web user profile:', err);
+    return res.status(500).json({ error: 'Failed to fetch profile' });
   }
 }
 

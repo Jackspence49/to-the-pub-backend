@@ -1,4 +1,4 @@
-// Middleware to ensure the request has a valid app user token
+// Middleware to ensure the request has a valid user token
 
 const ensureAppUserToken = (req, res) => {
   if (!req.user || req.user.userType !== 'app_user') {
@@ -8,5 +8,13 @@ const ensureAppUserToken = (req, res) => {
   return true;
 };
 
-exports = ensureAppUserToken;
+const ensureWebUserToken = (req, res) => {
+  if (!req.user || req.user.userType !== 'web_user') {
+    res.status(403).json({ error: 'Web user authentication required' });
+    return false;
+  }
+  return true;
+};
+
+module.exports = { ensureAppUserToken, ensureWebUserToken };
 

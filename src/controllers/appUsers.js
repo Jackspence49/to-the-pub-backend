@@ -147,14 +147,13 @@ async function getProfile(req, res) {
     const selectSql = `
       SELECT id, email, full_name, phone, last_login, created_at
       FROM app_users
-      WHERE id = ? AND is_active = 1
+      WHERE id = ?
       LIMIT 1
     `;
 
-    // 2. Fetch User Data based on token ID
     const [rows] = await db.execute(selectSql, [req.user.userId]);
 
-    if (!rows || rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'App user not found' });
     }
 
@@ -166,8 +165,8 @@ async function getProfile(req, res) {
       data: {
         id: user.id,
         email: user.email,
+        full_name: user.full_name,
         // Use empty string fallback for null values to keep frontend code clean
-        full_name: user.full_name || '', 
         phone: user.phone || '',
         last_login: user.last_login,
         created_at: user.created_at
