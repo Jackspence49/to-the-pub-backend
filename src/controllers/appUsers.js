@@ -398,11 +398,48 @@ async function resetPassword(req, res) {
   }
 }
 
+async function deleteUser(req, res) {
+  if (!ensureWebUserToken(req, res)) return;
+
+  const { id } = req.params;
+  try {
+    const [rows] = await db.execute(
+      `SELECT id, email FROM app_users WHERE id = ? LIMIT 1`,
+      [id]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userToDelete = rows[0];
+
+    const [result] = await db.execute(`DELETE FROM app_users WHERE id = ?`, [id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'User deleted successfully',
+      data: {
+        id: userToDelete.id,
+        email: userToDelete.email
+      }
+    });
+  } catch (err) {
+    console.error('Error deleting user:', err.message || err);
+    return res.status(500).json({ error: 'Failed to delete user' });
+  }
+}
+
 module.exports = {
   register,
   login,
   getProfile,
   updateProfile,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  deleteUser
 };
