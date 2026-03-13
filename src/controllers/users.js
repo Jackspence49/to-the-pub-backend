@@ -124,7 +124,7 @@ async function login(req, res) {
       'UPDATE web_users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', [user.id]);
     req.clearFailedLogins?.();
 
-    const token = buildWebUserToken({ id: user.id, email: user.email });
+    const token = buildWebUserToken({ id: user.id, email: user.email, role: user.role });
 
     return res.status(200).json({
       data: {

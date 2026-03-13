@@ -1,6 +1,6 @@
 const db = require('../utils/db');
 
-//Assigns a web user to a bar. super_admin only.
+//Assigns a web user to a bar. admin only.
 async function assignUserToBar(req, res) {
   const { userId, barId } = req.params;
   const assignedBy = req.user.userId;
@@ -37,7 +37,7 @@ async function assignUserToBar(req, res) {
   }
 }
 
-//Removes a web user's assignment to a bar. super_admin only.
+//Removes a web user's assignment to a bar. admin only.
 async function unassignUserFromBar(req, res) {
   const { userId, barId } = req.params;
 
@@ -62,12 +62,12 @@ async function unassignUserFromBar(req, res) {
   }
 }
 
-//Returns all bars assigned to a user. super_admin or the user themselves.
+//Returns all bars assigned to a user. admin or the user themselves.
 async function getUserBars(req, res) {
   const { userId } = req.params;
   const requestingUser = req.user;
 
-  if (requestingUser.role !== 'super_admin' && requestingUser.userId !== userId) {
+  if (requestingUser.role !== 'admin' && requestingUser.userId !== userId) {
     return res.status(403).json({ error: 'Access denied.' });
   }
 
@@ -89,7 +89,7 @@ async function getUserBars(req, res) {
   }
 }
 
-//Returns all users assigned to a bar. super_admin only.
+//Returns all users assigned to a bar. admin only.
 async function getBarUsers(req, res) {
   const { barId } = req.params;
 
