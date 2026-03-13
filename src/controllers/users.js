@@ -3,7 +3,7 @@ const db = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const { MIN_PASSWORD_LENGTH, SALT_ROUNDS, DUMMY_HASH } = require('../utils/constants');
-const { normalizeEmail, isValidEmail, isValidPassword, isValidRole } = require('../utils/user');
+const { normalizeEmail, isValidEmail, isValidPassword, isValidRole, isValidFullName, normalizeFullName } = require('../utils/user');
 const { buildWebUserToken } = require('../utils/token');
 const { ensureWebUserToken } = require('../middleware/token')
 
@@ -28,6 +28,10 @@ async function signup(req, res) {
 
   if (password.length < MIN_PASSWORD_LENGTH || !isValidPassword(password)) {
     return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+  }
+
+  if (!isValidFullName(full_name)) {
+      return res.status(400).json({ error: 'Invalid full name. Must be 2–100 characters and contain only letters, spaces, hyphens, or apostrophes.' });
   }
 
   try {
@@ -180,29 +184,86 @@ async function updateProfile(req, res) {
   return; 
   }
 
+  const {email, full_name, new_password } = req.body || {};
+
+  if (full_name === undefined && !new_password && !email)  {
+    return res.status(400).json({ error: 'No profile fields supplied' });
+  }
+
+    // Validate full_name if provided
+  if (full_name !== undefined && full_name !== null) {
+    if (!isValidFullName(full_name)) {
+      return res.status(400).json({ error: 'Invalid full name. Must be 2–100 characters and contain only letters, spaces, hyphens, or apostrophes.' });
+    }
+  }
+
+  if (new_password) {
+    if (new_password.length < MIN_PASSWORD_LENGTH || !isValidPassword(new_password)) {
+      return res.status(400).json({ error: 'Password does not meet complexity requirements' });
+    }
+  }
+
+  let normalizedEmail;
+  if (email) {
+    normalizedEmail = normalizeEmail(email);
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+  }
+
   try {
-    const userId = req.user.userId; // From JWT payload
-    const { full_name } = req.body;
-    
-    if (!full_name) {
-      return res.status(400).json({ error: 'full_name is required' });
+    const updates = [];
+    const params = [];
+    const updatedFields = [];
+
+    if (normalizedEmail) {
+      updates.push('email = ?');
+      params.push(normalizedEmail);
+      updatedFields.push('email');
     }
-    
-    const updateSql = `UPDATE web_users SET full_name = ? WHERE id = ?`;
-    const [result] = await db.execute(updateSql, [full_name, userId]);
-    
+
+    if (full_name !== undefined) {
+      updates.push('full_name = ?');
+      params.push(full_name != null ? normalizeFullName(full_name) : null);
+      updatedFields.push('full_name');
+    }
+
+    if (new_password) {
+        const newHash = await bcrypt.hash(new_password, SALT_ROUNDS);
+        updates.push('password_hash = ?');
+        params.push(newHash);
+        updatedFields.push('password');
+    }
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+
+    const updateSql = `
+      UPDATE web_users
+      SET ${updates.join(', ')}
+      WHERE id = ?
+    `;
+
+    params.push(req.user.userId);
+
+    const [result] = await db.execute(updateSql, params)
+
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: 'Web user not found or inactive' });
     }
-    
+
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      data: { id: userId, full_name }
+      updatedFields
     });
   } catch (err) {
-    console.error('Error updating user profile:', err.message || err);
-    return res.status(500).json({ error: 'Failed to update user profile' });
+    console.error('Error updating app user profile:', err);
+
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+
+    return res.status(500).json({ error: 'Failed to update profile' });
   }
 }
 
@@ -377,6 +438,10 @@ async function createUser(req, res) {
 
   if (!isValidRole(role)){
     return res.status(400).json ({ error: 'Role needs to be admin, venue_owner, manager, or staff'})
+  }
+
+  if (!isValidFullName(full_name)) {
+      return res.status(400).json({ error: 'Invalid full name. Must be 2–100 characters and contain only letters, spaces, hyphens, or apostrophes.' });
   }
 
   try {
